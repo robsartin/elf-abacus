@@ -16,6 +16,12 @@ pip install -e '.[dev]'
 Put `puzzles.csv` / `practice_puzzles.csv` in `data/` (git-ignored; competition data is not
 redistributable). Rules, format and limits live on the competition's Data and Evaluation pages.
 
+## Run
+
+```bash
+.venv/bin/python -m elf_abacus   # writes submissions/latest.csv, prints score
+```
+
 ## Layout
 
 - `src/elf_abacus/` library (verifier first, then solvers)
