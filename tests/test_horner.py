@@ -58,3 +58,22 @@ def test_shouldReturnNoneWhenNoDigitTableFitsInRegisters():
 def test_shouldReturnNoneWhenEveryTableOverflowsValueLimit():
     puzzle = Puzzle("p", [3], [4, 6], 5)
     assert solve(puzzle) is None
+
+
+CLUSTERED = Puzzle(
+    "clustered",
+    [5, 9, 22, 30, 32],
+    [
+        3000000011123, 3000000011910, 3000000012321, 3000000012838, 3000000013695,
+        3000000014512, 700000000000517, 700000000001209, 700000000001388,
+        700000000002014, 700000000002419, 700000000003233,
+    ],
+    10**15,
+)  # fmt: skip
+
+
+def test_shouldBuildClusteredTargetsFromEarlierOnesWhenTheyDifferByLittle():
+    """Direct Horner needs 159 instructions here (anchors reach 75); require under 90."""
+    program = solve(CLUSTERED)
+    assert program is not None
+    assert verify(CLUSTERED, program) < 90
