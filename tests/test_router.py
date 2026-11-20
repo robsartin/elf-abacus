@@ -17,7 +17,7 @@ def test_shouldReportPuzzleFeaturesWhenGivenAPuzzle():
 def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     plan = route(BIG, seeds=1)
     assert plan.horner
-    assert plan.chains == (ChainRun(pool_size=40, pairs=True, seed=0),)
+    assert plan.chains == (ChainRun(pool_size=40, pairs=True, seed=0, grow=True),)
 
 
 def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():

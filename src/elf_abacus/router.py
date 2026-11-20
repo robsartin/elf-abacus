@@ -27,6 +27,7 @@ class ChainRun:
     pool_size: int
     pairs: bool
     seed: int
+    grow: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,8 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
     """Big puzzles get `seeds` runs of the strongest chain; small ones the cheap full portfolio."""
     if features(puzzle).targets >= BIG_TARGETS:
         return Route(
-            True, tuple(ChainRun(BIG_POOL, True, seed) for seed in range(seeds))
+            True,
+            tuple(ChainRun(BIG_POOL, True, seed, grow=True) for seed in range(seeds)),
         )
     return Route(
         True,
