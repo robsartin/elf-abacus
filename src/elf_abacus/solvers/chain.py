@@ -398,6 +398,123 @@ def find_pair_lazy(
     return best
 
 
+MAX_PRODUCT_GRID = 8_000_000  # (first value, tail) combinations scanned per pass
+PRODUCT_SPAN = 3  # forward levels plus tail terms of the first value in a product pair
+
+
+def _legal_tail(
+    base: int, terms: list[tuple[int, int]], pool: list[int], limit: int
+) -> bool:
+    """True if applying `terms` to `base` never leaves 1..limit (additions run first)."""
+    running = base
+    for sign, idx in terms:
+        running += sign * pool[idx]
+        if not 1 <= running <= limit:
+            return False
+    return True
+
+
+def find_product_pair(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+) -> Chain | None:
+    """Cheapest `a +/- c + tail` where c is a top-level forward value times or divided by a pool value.
+
+    The stored forward sets stop one level short of c, so c is never enumerated. Instead each
+    candidate c = target -/+ a -/+ tail is derived from the other side and tested backwards: c is
+    a product `y * p` when p divides c and c / p is a stored value y, or a quotient `y // p` when
+    c * p is. Divisibility prunes almost every candidate, so one pass over a set of ~10^7 values
+    per pool value costs about a second.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    top = len(forward) - 1
+    c_level = top + 1
+    base_cost = c_level + 1  # building c from y, plus the join
+    ys = forward[top].vals
+    first_index: dict[int, int] = {}
+    for i, v in enumerate(pool):
+        if v > 1:
+            first_index.setdefault(v, i)
+    unique = list(first_index.items())
+    best: Chain | None = None
+    spans = sorted(
+        (
+            (la, t)
+            for la in range(top + 1)
+            for t in range(PAIR_TERMS + 1)
+            if la + t <= PRODUCT_SPAN
+        ),
+        key=lambda lt: lt[0] + lt[1],
+    )
+    for la, t in spans:
+        if base_cost + la + t >= bound:
+            break
+        a_set = forward[la]
+        tail_idx = np.nonzero(sums.nterms == t)[0]
+        if len(a_set.vals) * len(tail_idx) > MAX_PRODUCT_GRID:
+            continue
+        # gap = target - (a joined with c); the tail terms must supply it
+        for kind in (PAIR_ADD, PAIR_SUB, PAIR_RSUB):
+            av = a_set.vals[:, None]
+            gv = sums.vals[tail_idx][None, :]
+            # base = a join c must equal target - gap
+            want = target - gv
+            if kind == PAIR_ADD:
+                c = want - av
+            elif kind == PAIR_SUB:  # a - c = want
+                c = av - want
+            else:  # c - a = want
+                c = want + av
+            ia, js = np.nonzero((c > 0) & (c <= limit))
+            cvals = c[ia, js]
+            for pv, k in unique:
+                divisible = np.nonzero(cvals % pv == 0)[0]
+                small = np.nonzero(cvals <= limit // pv)[0]
+                for op2, rows, y in (
+                    (OP2_MUL, divisible, cvals[divisible] // pv),
+                    (OP2_DIVA, small, cvals[small] * pv),
+                ):
+                    pos = np.minimum(np.searchsorted(ys, y), len(ys) - 1)
+                    hit = rows[np.nonzero(ys[pos] == y)[0]]
+                    pos = pos[np.nonzero(ys[pos] == y)[0]]
+                    for j, h in enumerate(hit):
+                        a_idx, gap_idx = int(ia[h]), int(tail_idx[js[h]])
+                        nterms = int(sums.nterms[gap_idx])
+                        terms = decode_terms(int(sums.codes[gap_idx]), nterms)
+                        terms.sort(key=lambda x: -x[0])
+                        av_i, cv = int(a_set.vals[a_idx]), int(cvals[h])
+                        join = (
+                            av_i + cv
+                            if kind == PAIR_ADD
+                            else av_i - cv
+                            if kind == PAIR_SUB
+                            else cv - av_i
+                        )
+                        if not (
+                            1 <= join <= limit and _legal_tail(join, terms, pool, limit)
+                        ):
+                            continue
+                        code_b = (int(forward[top].codes[pos[j]]) << 9) | (op2 << 6) | k
+                        cost = base_cost + la + nterms
+                        if cost < bound:
+                            best = Chain(
+                                la,
+                                int(a_set.codes[a_idx]),
+                                terms,
+                                cost,
+                                (kind, c_level, code_b),
+                            )
+                            bound = cost
+                        break
+                    if best is not None and best.cost == base_cost + la + t:
+                        return best
+    return best
+
+
 _SECOND_OPS = (
     lambda acc, rk: ["+", acc, rk, acc],
     lambda acc, rk: ["*", acc, rk, acc],
@@ -516,6 +633,10 @@ def plan_target(
             if deeper is not None:
                 best = Plan(deeper, None, 1, deeper.cost)
                 bound = deeper.cost
+        product = find_product_pair(target, pool, limit, forward, sums, bound)
+        if product is not None:
+            best = Plan(product, None, 1, product.cost)
+            bound = product.cost
     near: list[tuple[int, int, int]] = []
     for level, fw in enumerate(forward):
         if level + 2 > bound - 1:
