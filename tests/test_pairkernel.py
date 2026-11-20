@@ -181,3 +181,58 @@ def test_shouldJoinALazilyExtendedValueToAForwardValueWhenTargetNeedsOneMoreOper
     assert (
         verify(Puzzle("p", pool, [target], 10**12, registers=8), program) == chain.cost
     )
+
+
+@needs_native
+def test_shouldSolveAndVerifyWhenLazyPairSearchIsEnabled():
+    from elf_abacus.solvers.chain import solve
+    from elf_abacus.verifier import Puzzle, verify
+
+    puzzle = Puzzle(
+        "p", [6, 13, 32, 33], [181902, 453647, 679178, 745468], 48817500798239, 48
+    )
+    program = solve(puzzle, pool_size=14, depth=2, nesting=2, lazy=True)
+    assert program is not None
+    verify(puzzle, program)
+
+
+@needs_native
+def test_shouldStopExpandingWhenLazyWorkBudgetIsSpent():
+    v = np.arange(1, 400)
+    b = np.arange(1, 400)
+    short = ShortSums(np.arange(-5, 6), np.zeros(11, dtype=np.int64), np.arange(11))
+    args = (v, np.array([3, 7]), b, short, 300, PAIR_ADD, 5, 10**9, 2)
+    full = pairkernel.lazy_hits_native(*args)
+    capped = pairkernel.lazy_hits_native(*args, budget=500)
+    assert 0 < len(capped.ia) < len(full.ia)
+
+
+def _native_status(env_extra, tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    code = "from elf_abacus.solvers import pairkernel as k;print(k.native_available())"
+    env = {**os.environ, "ELF_ABACUS_CACHE": str(tmp_path), **env_extra}
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.strip()
+
+
+def test_shouldFallBackToNumpyWhenNativeIsSwitchedOff(tmp_path):
+    assert _native_status({"ELF_ABACUS_NATIVE": "0"}, tmp_path) == "False"
+
+
+def test_shouldFallBackToNumpyWhenNoCompilerExists(tmp_path):
+    assert _native_status({"CC": "no-such-compiler-xyz"}, tmp_path) == "False"
+
+
+@needs_native
+def test_shouldBuildIntoTheCacheDirectoryWhenFirstUsed(tmp_path):
+    assert _native_status({}, tmp_path) == "True"
+    assert list(tmp_path.glob("pairs-*"))

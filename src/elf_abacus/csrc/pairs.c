@@ -100,7 +100,8 @@ i64 pair_hits(const i64 *a, i64 na, const i64 *b, i64 nb,
  * in the pool, under one of the six second operations (the codes of chain.py: 0 x+r, 1 x*r, 2 x-r,
  * 3 r-x, 4 x/r, 5 r/x). For every b the window of admissible a values is mapped back to a window
  * of V, so the work is proportional to |B| * ops * |pool| gallops plus the pairs actually
- * expanded, not to |V| * ops * |pool|. B should be the smaller set. */
+ * expanded, not to |V| * ops * |pool|. B should be the smaller set. Expansion stops once `budget`
+ * candidate pairs have been scanned, keeping the hits found so far. */
 static void v_window(int op, i64 r, i64 L, i64 U, i64 *vlo, i64 *vhi) {
     i64 t;
     switch (op) {
@@ -120,8 +121,8 @@ static void v_window(int op, i64 r, i64 L, i64 U, i64 *vlo, i64 *vhi) {
 i64 lazy_pair_hits(const i64 *v, i64 nv, const i64 *pool, i64 np, const i64 *b, i64 nb,
                    const i64 *sv, const i64 *snt, i64 ns,
                    i64 target, int kind, i64 width, i64 limit, i64 max_nterms,
-                   i64 *out_iv, i64 *out_op, i64 *out_k, i64 *out_ib, i64 *out_si, i64 cap) {
-    i64 found = 0, sh = ns >> 1;
+                   i64 *out_iv, i64 *out_op, i64 *out_k, i64 *out_ib, i64 *out_si, i64 cap, i64 budget) {
+    i64 found = 0, sh = ns >> 1, work = 0;
     for (int op = 0; op < 6; op++) {
         for (i64 k = 0; k < np; k++) {
             i64 r = pool[k], lo = nv >> 1, hi = nv >> 1;
@@ -135,6 +136,8 @@ i64 lazy_pair_hits(const i64 *v, i64 nv, const i64 *pool, i64 np, const i64 *b, 
                 if (vlo > vhi) continue;
                 lo = bound_from(v, nv, vlo, 0, lo);
                 hi = bound_from(v, nv, vhi, 1, hi);
+                work += hi - lo;
+                if (work > budget) return found; /* the work budget bounds the time spent */
                 for (i64 i = lo; i < hi; i++) {
                     i64 x = v[i], a;
                     switch (op) {

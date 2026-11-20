@@ -190,7 +190,7 @@ def _load() -> ctypes.CDLL | None:
     lib.lazy_pair_hits.argtypes = [
         _I64P, i64, _I64P, i64, _I64P, i64, _I64P, _I64P, i64,
         i64, ctypes.c_int, i64, i64, i64,
-        _I64P, _I64P, _I64P, _I64P, _I64P, i64,
+        _I64P, _I64P, _I64P, _I64P, _I64P, i64, i64,
     ]  # fmt: skip
     lib.lazy_pair_hits.restype = i64
     return lib
@@ -282,6 +282,7 @@ def lazy_hits_native(
     limit: int,
     max_nterms: int,
     cap: int = DEFAULT_HIT_CAP,
+    budget: int = 1 << 62,
 ) -> LazyHits:
     """Hits of `(v op2 pool) kind b` against the short sums, without storing the extended set."""
     lib = _lib()
@@ -295,7 +296,7 @@ def lazy_hits_native(
             _ptr(v), len(v), _ptr(pool), len(pool), _ptr(b), len(b),
             _ptr(sv), _ptr(snt), len(sv),
             target, kind, width, limit, max_nterms,
-            *(_ptr(out[i]) for i in range(5)), cap,
+            *(_ptr(out[i]) for i in range(5)), cap, budget,
         )
     )  # fmt: skip
     kept = min(found, cap)

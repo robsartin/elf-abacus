@@ -42,6 +42,7 @@ class Sums:
 
 
 MAX_PAIRS = 4_000_000  # candidate pairs expanded per search, which bounds memory
+LAZY_BUDGET = 200_000_000  # candidate pairs one lazy probe may scan (about a second)
 PAIR_TERMS = (
     2  # tail terms a pair may add; also bounds the window searched around the target
 )
@@ -337,13 +338,14 @@ def find_pair_lazy(
     sums: Sums,
     max_cost: int | None = None,
     max_other: int = 300_000,
+    budget: int = LAZY_BUDGET,
 ) -> Chain | None:
     """Pair search whose first value has one more operation than any stored forward set.
 
     That value is `top op pool` for every `top` in the deepest stored set; it is never stored, only
     probed (see `pairkernel.lazy_hits_native`), so it needs the native kernel. It is joined to each
     stored set of at most `max_other` values. Returns None when no such pair costs under
-    `max_cost`.
+    `max_cost`. Each probe scans at most `budget` candidate pairs, so dense targets cannot stall it.
     """
     bound = max_cost if max_cost is not None else 1 << 30
     depth = len(forward)  # the lazy value's own level
@@ -371,6 +373,7 @@ def find_pair_lazy(
                 width,
                 limit,
                 min(PAIR_TERMS, bound - depth - lb - 2),
+                budget=budget,
             )
             if len(found.ia) == 0:
                 continue
@@ -488,6 +491,7 @@ def plan_target(
     max_cost: int | None = None,
     depth: int = 1,
     pairs: bool = True,
+    lazy: bool = False,
 ) -> Plan | None:
     """Cheapest plan: a direct chain, or a nearby forward value plus a plan for the gap.
 
@@ -507,6 +511,11 @@ def plan_target(
         if pair is not None:
             best = Plan(pair, None, 1, pair.cost)
             bound = pair.cost
+        if lazy:
+            deeper = find_pair_lazy(target, pool, limit, forward, sums, bound)
+            if deeper is not None:
+                best = Plan(deeper, None, 1, deeper.cost)
+                bound = deeper.cost
     near: list[tuple[int, int, int]] = []
     for level, fw in enumerate(forward):
         if level + 2 > bound - 1:
@@ -591,6 +600,7 @@ def solve(
     depth: int = 3,
     nesting: int = 3,
     pairs: bool = True,
+    lazy: bool = False,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none."""
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
@@ -609,7 +619,14 @@ def solve(
         if target in covered:
             continue
         plan = plan_target(
-            target, pool, puzzle.value_limit, forward, sums, depth=nesting, pairs=pairs
+            target,
+            pool,
+            puzzle.value_limit,
+            forward,
+            sums,
+            depth=nesting,
+            pairs=pairs,
+            lazy=lazy and pairkernel.native_available(),
         )
         if plan is None:
             return None
