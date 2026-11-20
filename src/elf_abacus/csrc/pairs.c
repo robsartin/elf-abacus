@@ -95,3 +95,71 @@ i64 pair_hits(const i64 *a, i64 na, const i64 *b, i64 nb,
     }
     return found;
 }
+
+/* Lazy variant: the A side is never stored. Each value is x op r for x in the sorted array V and r
+ * in the pool, under one of the six second operations (the codes of chain.py: 0 x+r, 1 x*r, 2 x-r,
+ * 3 r-x, 4 x/r, 5 r/x). For every b the window of admissible a values is mapped back to a window
+ * of V, so the work is proportional to |B| * ops * |pool| gallops plus the pairs actually
+ * expanded, not to |V| * ops * |pool|. B should be the smaller set. */
+static void v_window(int op, i64 r, i64 L, i64 U, i64 *vlo, i64 *vhi) {
+    i64 t;
+    switch (op) {
+    case 0: *vlo = L - r; *vhi = U - r; break;
+    case 1: *vlo = (L + r - 1) / r; *vhi = U / r; break;
+    case 2: *vlo = L + r; *vhi = U + r; break;
+    case 3: *vlo = r - U; *vhi = r - L; break;
+    case 4:
+        if (__builtin_mul_overflow(L, r, vlo)) *vlo = INT64_MAX;
+        if (__builtin_mul_overflow(U, r, &t)) t = INT64_MAX;
+        *vhi = t;
+        break;
+    default: *vlo = (r + U - 1) / U; *vhi = r / L; break;
+    }
+}
+
+i64 lazy_pair_hits(const i64 *v, i64 nv, const i64 *pool, i64 np, const i64 *b, i64 nb,
+                   const i64 *sv, const i64 *snt, i64 ns,
+                   i64 target, int kind, i64 width, i64 limit, i64 max_nterms,
+                   i64 *out_iv, i64 *out_op, i64 *out_k, i64 *out_ib, i64 *out_si, i64 cap) {
+    i64 found = 0, sh = ns >> 1;
+    for (int op = 0; op < 6; op++) {
+        for (i64 k = 0; k < np; k++) {
+            i64 r = pool[k], lo = nv >> 1, hi = nv >> 1;
+            for (i64 j = 0; j < nb; j++) {
+                i64 ac = kind == KIND_ADD ? target - b[j] : kind == KIND_SUB ? target + b[j] : b[j] - target;
+                i64 L = ac - width < 1 ? 1 : ac - width;
+                i64 U = ac + width > limit ? limit : ac + width;
+                if (L > U) continue;
+                i64 vlo, vhi;
+                v_window(op, r, L, U, &vlo, &vhi);
+                if (vlo > vhi) continue;
+                lo = bound_from(v, nv, vlo, 0, lo);
+                hi = bound_from(v, nv, vhi, 1, hi);
+                for (i64 i = lo; i < hi; i++) {
+                    i64 x = v[i], a;
+                    switch (op) {
+                    case 0: a = x + r; break;
+                    case 1: a = x * r; break;
+                    case 2: a = x - r; break;
+                    case 3: a = r - x; break;
+                    case 4: if (x % r) continue; a = x / r; break;
+                    default: if (r % x) continue; a = r / x; break;
+                    }
+                    if (a < 1 || a > limit) continue;
+                    i64 base = base_of(kind, a, b[j]);
+                    if (base < 1 || base > limit) continue;
+                    i64 gap = target - base;
+                    if (gap > width || gap < -width) continue;
+                    i64 s = sh = bound_from(sv, ns, gap, 0, sh);
+                    if (s == ns || sv[s] != gap || snt[s] > max_nterms) continue;
+                    if (found < cap) {
+                        out_iv[found] = i; out_op[found] = op; out_k[found] = k;
+                        out_ib[found] = j; out_si[found] = s;
+                    }
+                    found++;
+                }
+            }
+        }
+    }
+    return found;
+}

@@ -40,6 +40,17 @@ class ShortSums:
 
 
 @dataclass(frozen=True)
+class LazyHits:
+    """Hits whose first value is `op2` applied to `v[ia]` and pool entry `k` (never stored)."""
+
+    ia: np.ndarray  # index into the extended set
+    op: np.ndarray  # second operation, the OP2_* codes of chain.py
+    k: np.ndarray  # pool index
+    ib: np.ndarray  # index into the other set
+    si: np.ndarray  # index into the short-sum table
+
+
+@dataclass(frozen=True)
 class PairHits:
     ia: np.ndarray  # index into the small set
     ib: np.ndarray  # index into the large set
@@ -176,6 +187,12 @@ def _load() -> ctypes.CDLL | None:
         i64,
     ]
     lib.pair_hits.restype = i64
+    lib.lazy_pair_hits.argtypes = [
+        _I64P, i64, _I64P, i64, _I64P, i64, _I64P, _I64P, i64,
+        i64, ctypes.c_int, i64, i64, i64,
+        _I64P, _I64P, _I64P, _I64P, _I64P, i64,
+    ]  # fmt: skip
+    lib.lazy_pair_hits.restype = i64
     return lib
 
 
@@ -252,3 +269,35 @@ def hits_native(
     )
     kept = min(found, cap)
     return PairHits(out[0, :kept].copy(), out[1, :kept].copy(), out[2, :kept].copy())
+
+
+def lazy_hits_native(
+    v: np.ndarray,
+    pool: np.ndarray,
+    b: np.ndarray,
+    short: ShortSums,
+    target: int,
+    kind: int,
+    width: int,
+    limit: int,
+    max_nterms: int,
+    cap: int = DEFAULT_HIT_CAP,
+) -> LazyHits:
+    """Hits of `(v op2 pool) kind b` against the short sums, without storing the extended set."""
+    lib = _lib()
+    if lib is None:
+        raise RuntimeError("native pair kernel unavailable")
+    v, pool, b = _i64(v), _i64(pool), _i64(b)
+    sv, snt = _i64(short.vals), _i64(short.nterms)
+    out = np.empty((5, cap), dtype=np.int64)
+    found = int(
+        lib.lazy_pair_hits(
+            _ptr(v), len(v), _ptr(pool), len(pool), _ptr(b), len(b),
+            _ptr(sv), _ptr(snt), len(sv),
+            target, kind, width, limit, max_nterms,
+            *(_ptr(out[i]) for i in range(5)), cap,
+        )
+    )  # fmt: skip
+    kept = min(found, cap)
+    rows = [out[i, :kept].copy() for i in range(5)]
+    return LazyHits(*rows)

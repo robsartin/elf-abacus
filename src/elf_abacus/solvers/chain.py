@@ -225,6 +225,37 @@ def find_chain(
     return best
 
 
+def _cheapest_legal(
+    base: np.ndarray,
+    tail_pos: np.ndarray,
+    sums: Sums,
+    pool: list[int],
+    limit: int,
+    head_cost: int,
+    bound: int,
+) -> tuple[int, list[tuple[int, int]], int] | None:
+    """Cheapest hit (index, tail terms, cost) whose running value stays within `limit`.
+
+    Hit `h` joins the head value `base[h]` to the sums entry `tail_pos[h]`; only the 25 hits with
+    the fewest tail terms are tried, and none may cost `bound` or more.
+    """
+    for h in np.argsort(sums.nterms[tail_pos], kind="stable")[:25]:
+        nterms = int(sums.nterms[tail_pos[h]])
+        cost = head_cost + nterms
+        if cost >= bound:
+            return None
+        terms = decode_terms(int(sums.codes[tail_pos[h]]), nterms)
+        terms.sort(key=lambda t: -t[0])  # additions first keeps every step positive
+        running = int(base[h])
+        legal = True
+        for sign, idx in terms:
+            running += sign * pool[idx]
+            legal = legal and running <= limit
+        if legal:
+            return int(h), terms, cost
+    return None
+
+
 def find_pair(
     target: int,
     pool: list[int],
@@ -289,24 +320,78 @@ def find_pair(
                 if kind == PAIR_SUB
                 else bv - av
             )
-            hits = np.arange(len(ia))
-            for h in hits[np.argsort(sums.nterms[pos], kind="stable")[:25]]:
-                cost = la + lb + 1 + int(sums.nterms[pos[h]])
-                if cost >= bound:
-                    break
-                nterms = int(sums.nterms[pos[h]])
-                terms = decode_terms(int(sums.codes[pos[h]]), nterms)
-                terms.sort(key=lambda t: -t[0])
-                running = int(base[h])
-                legal = True
-                for sign, idx in terms:
-                    running += sign * pool[idx]
-                    legal = legal and running <= limit
-                if legal:
-                    code_a, code_b = int(small.codes[ia[h]]), int(large.codes[ib[h]])
-                    best = Chain(la, code_a, terms, cost, (kind, lb, code_b))
-                    bound = cost
-                    break
+            pick = _cheapest_legal(base, pos, sums, pool, limit, la + lb + 1, bound)
+            if pick is not None:
+                h, terms, cost = pick
+                code_a, code_b = int(small.codes[ia[h]]), int(large.codes[ib[h]])
+                best = Chain(la, code_a, terms, cost, (kind, lb, code_b))
+                bound = cost
+    return best
+
+
+def find_pair_lazy(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+    max_other: int = 300_000,
+) -> Chain | None:
+    """Pair search whose first value has one more operation than any stored forward set.
+
+    That value is `top op pool` for every `top` in the deepest stored set; it is never stored, only
+    probed (see `pairkernel.lazy_hits_native`), so it needs the native kernel. It is joined to each
+    stored set of at most `max_other` values. Returns None when no such pair costs under
+    `max_cost`.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    depth = len(forward)  # the lazy value's own level
+    short = sums.nterms <= PAIR_TERMS
+    width = int(sums.vals[short].max())
+    short_pos = np.nonzero(short)[0]
+    short_sums = ShortSums(sums.vals[short_pos], sums.nterms[short_pos], short_pos)
+    pool_arr = np.array(pool, dtype=np.int64)
+    top = forward[-1]
+    best: Chain | None = None
+    for lb in range(len(forward)):
+        if depth + lb + 1 >= bound:
+            break
+        other = forward[lb]
+        if len(other.vals) > max_other:
+            continue
+        for kind in (PAIR_ADD, PAIR_SUB, PAIR_RSUB):
+            found = pairkernel.lazy_hits_native(
+                top.vals,
+                pool_arr,
+                other.vals,
+                short_sums,
+                target,
+                kind,
+                width,
+                limit,
+                min(PAIR_TERMS, bound - depth - lb - 2),
+            )
+            if len(found.ia) == 0:
+                continue
+            x, r = top.vals[found.ia], pool_arr[found.k]
+            safe_r, safe_x = np.maximum(r, 1), np.maximum(x, 1)
+            a = np.select(
+                [found.op == o for o in range(6)],
+                [x + r, x * r, x - r, r - x, x // safe_r, r // safe_x],
+            )
+            y = other.vals[found.ib]
+            base = a + y if kind == PAIR_ADD else a - y if kind == PAIR_SUB else y - a
+            pick = _cheapest_legal(
+                base, short_sums.pos[found.si], sums, pool, limit, depth + lb + 1, bound
+            )
+            if pick is not None:
+                h, terms, cost = pick
+                code = (int(top.codes[found.ia[h]]) * 8 + int(found.op[h])) * 64
+                code += int(found.k[h])
+                code_b = int(other.codes[found.ib[h]])
+                best = Chain(depth, code, terms, cost, (kind, lb, code_b))
+                bound = cost
     return best
 
 

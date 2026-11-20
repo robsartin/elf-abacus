@@ -88,3 +88,96 @@ def test_shouldFindTheSameChainWhenPairSearchRunsNativeOrNumpy(target):
     want = find_pair(target, pool, limit, forward, sums, native=False)
     got = find_pair(target, pool, limit, forward, sums, native=True)
     assert got == want
+
+
+def _lazy_reference(v, pool, b, short, target, kind, width, limit, max_nterms):
+    """Brute force: every (a value, b index, short index) of a = op(v, r) over all ops."""
+    table = {int(x): i for i, x in enumerate(short.vals)}
+    found = []
+    for x in v.tolist():
+        for r in pool:
+            for a in (
+                x + r if x + r <= limit else None,
+                x * r if x * r <= limit else None,
+                x - r if x > r else None,
+                r - x if r > x else None,
+                x // r if x % r == 0 else None,
+                r // x if r % x == 0 else None,
+            ):
+                if a is None:
+                    continue
+                for ib, y in enumerate(b.tolist()):
+                    base = (
+                        a + y
+                        if kind == PAIR_ADD
+                        else a - y
+                        if kind == PAIR_SUB
+                        else y - a
+                    )
+                    gap = target - base
+                    si = table.get(gap)
+                    if (
+                        si is not None
+                        and 1 <= base <= limit
+                        and abs(gap) <= width
+                        and short.nterms[si] <= max_nterms
+                    ):
+                        found.append((a, ib, si))
+    return sorted(found)
+
+
+@needs_native
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("seed", range(6))
+def test_shouldMatchBruteForceWhenExtendingForwardValuesLazily(kind, seed):
+    rng = np.random.default_rng(100 + seed)
+    pool = [int(x) for x in rng.integers(2, 40, size=6)]
+    v = np.unique(rng.integers(1, 600, size=60))
+    b = np.unique(rng.integers(1, 800, size=25))
+    short_vals = np.unique(rng.integers(-30, 30, size=25))
+    nt = rng.integers(0, 3, size=len(short_vals)).astype(np.int64)
+    short = ShortSums(short_vals, nt, np.arange(len(short_vals)))
+    target = int(rng.integers(50, 900))
+    got = pairkernel.lazy_hits_native(
+        v, np.array(pool), b, short, target, kind, 30, 10**6, 2
+    )
+    reproduced = []
+    for iv, op, k, ib, si in zip(got.ia, got.op, got.k, got.ib, got.si):
+        x, r = int(v[iv]), pool[k]
+        value = (x + r, x * r, x - r, r - x, x // r, r // x)[op]
+        reproduced.append((value, int(ib), int(si)))
+    want = _lazy_reference(v, pool, b, short, target, kind, 30, 10**6, 2)
+    assert sorted(reproduced) == want
+
+
+@needs_native
+def test_shouldFindAHitWhenAnExtendedValueMeetsTheTargetExactly():
+    """v=10 with pool 3 gives 13 (x+r); 13 + 7 = 20 with the empty tail (a short sum of 0)."""
+    short = ShortSums(np.array([0]), np.array([0]), np.array([0]))
+    got = pairkernel.lazy_hits_native(
+        np.array([10]), np.array([3]), np.array([7]), short, 20, PAIR_ADD, 2, 10**6, 2
+    )
+    assert (int(got.ia[0]), int(got.op[0]), int(got.k[0])) == (0, 0, 0)
+
+
+@needs_native
+def test_shouldJoinALazilyExtendedValueToAForwardValueWhenTargetNeedsOneMoreOperation():
+    from elf_abacus.solvers.chain import (
+        build_forward,
+        build_sums,
+        chain_program,
+        find_pair_lazy,
+    )
+    from elf_abacus.verifier import Puzzle, verify
+
+    pool = [776, 1324, 1429, 53]
+    target = ((776 * 1324 + 53) * 1429) + 53  # three forward ops, then + a pool value
+    forward = build_forward(pool, 10**12, depth=2)
+    sums = build_sums(pool, 2)
+    chain = find_pair_lazy(target, pool, 10**12, forward, sums)
+    assert chain is not None and chain.level == 3 and chain.second is not None
+    assert chain.cost <= 4
+    program = chain_program(chain, pool_regs=[0, 1, 2, 3], acc=4, tmp=5)
+    assert (
+        verify(Puzzle("p", pool, [target], 10**12, registers=8), program) == chain.cost
+    )
