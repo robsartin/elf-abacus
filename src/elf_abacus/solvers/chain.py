@@ -313,6 +313,7 @@ def find_pair(
     return best
 
 
+MAX_PRODUCT_GRID = 8_000_000  # (first value, tail) combinations scanned per pass
 PRODUCT_SPAN = 3  # forward levels plus tail terms of the first value in a product pair
 
 
@@ -369,6 +370,8 @@ def find_product_pair(
             break
         a_set = forward[la]
         tail_idx = np.nonzero(sums.nterms == t)[0]
+        if len(a_set.vals) * len(tail_idx) > MAX_PRODUCT_GRID:
+            continue
         # gap = target - (a joined with c); the tail terms must supply it
         for kind in (PAIR_ADD, PAIR_SUB, PAIR_RSUB):
             av = a_set.vals[:, None]
@@ -384,13 +387,16 @@ def find_product_pair(
             ia, js = np.nonzero((c > 0) & (c <= limit))
             cvals = c[ia, js]
             for pv, k in unique:
-                for op2, y in (
-                    (OP2_MUL, np.where(cvals % pv == 0, cvals // pv, 0)),
-                    (OP2_DIVA, np.where(cvals <= limit // pv, cvals * pv, 0)),
+                divisible = np.nonzero(cvals % pv == 0)[0]
+                small = np.nonzero(cvals <= limit // pv)[0]
+                for op2, rows, y in (
+                    (OP2_MUL, divisible, cvals[divisible] // pv),
+                    (OP2_DIVA, small, cvals[small] * pv),
                 ):
                     pos = np.minimum(np.searchsorted(ys, y), len(ys) - 1)
-                    hit = np.nonzero((ys[pos] == y) & (y > 0))[0]
-                    for h in hit:
+                    hit = rows[np.nonzero(ys[pos] == y)[0]]
+                    pos = pos[np.nonzero(ys[pos] == y)[0]]
+                    for j, h in enumerate(hit):
                         a_idx, gap_idx = int(ia[h]), int(tail_idx[js[h]])
                         nterms = int(sums.nterms[gap_idx])
                         terms = decode_terms(int(sums.codes[gap_idx]), nterms)
@@ -407,7 +413,7 @@ def find_product_pair(
                             1 <= join <= limit and _legal_tail(join, terms, pool, limit)
                         ):
                             continue
-                        code_b = (int(forward[top].codes[pos[h]]) << 9) | (op2 << 6) | k
+                        code_b = (int(forward[top].codes[pos[j]]) << 9) | (op2 << 6) | k
                         cost = base_cost + la + nterms
                         if cost < bound:
                             best = Chain(
