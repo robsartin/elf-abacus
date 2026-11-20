@@ -16,6 +16,15 @@ pip install -e '.[dev]'
 Put `puzzles.csv` / `practice_puzzles.csv` in `data/` (git-ignored; competition data is not
 redistributable). Rules, format and limits live on the competition's Data and Evaluation pages.
 
+### Optional native kernel
+
+The pair search has a C kernel (`src/elf_abacus/csrc/pairs.c`, ADR 0007). It is compiled
+automatically on first use with the system `cc` into `~/.cache/elf_abacus/` and loaded with
+`ctypes`; nothing to install. Without a compiler the pure-NumPy path runs instead, with the same
+results but about 3x slower. `ELF_ABACUS_NATIVE=0` forces NumPy; `CC=...` picks the compiler;
+`ELF_ABACUS_CACHE=...` moves the build cache. The opt-in lazy depth-4 probe
+(`chain.solve(..., lazy=True)`) needs the native kernel.
+
 ## Run
 
 ```bash
