@@ -7,7 +7,7 @@ license = { text = "Apache-2.0" }
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "mypy"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -21,3 +21,7 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 elf_abacus = ["csrc/*.c"]
+
+[tool.coverage.report]
+# Line and branch combined; the CLI entry point (__main__) is exercised by real runs, not unit tests.
+fail_under = 80
