@@ -19,6 +19,7 @@ REQUIRED_SLUGS = {
     "0002": "verifier-is-the-oracle",
     "0003": "competition-data-never-committed",
     "0004": "apache-2-license",
+    "0005": "numpy-meet-in-the-middle-chains",
 }
 
 
