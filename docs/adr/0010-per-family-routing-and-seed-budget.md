@@ -1,4 +1,4 @@
-# 0007. Route solvers by puzzle features and spend the saved time on seeds
+# 0010. Route solvers by puzzle features and spend the saved time on seeds
 
 Status: Proposed (2026-11-20)
 

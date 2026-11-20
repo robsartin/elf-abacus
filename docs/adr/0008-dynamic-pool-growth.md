@@ -1,4 +1,4 @@
-# 0007. Dynamic pool growth from solved targets
+# 0008. Dynamic pool growth from solved targets
 
 Status: Proposed (2026-11-20)
 

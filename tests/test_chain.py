@@ -301,6 +301,7 @@ def test_shouldWriteSolvedTargetsToDistinctRegistersWhenPoolGrows():
     # every target still sits in some register at the end: none was overwritten
     assert all(t in regs.values() for t in puzzle.targets)
 
+
 # a + (y * p) with y a forward value: the second term is one level deeper than any stored set
 PRODUCT_TARGET = 776 + (776 * 1324 + 1429) * 53
 

@@ -1,4 +1,4 @@
-# 0007. Product pair search: a second value one level deeper than the stored sets
+# 0009. Product pair search: a second value one level deeper than the stored sets
 
 Status: Proposed (2026-11-20)
 
