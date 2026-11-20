@@ -275,3 +275,27 @@ def test_shouldProduceVerifiedProgramWhenSolvingWithOrWithoutPairs(pairs):
     program = solve(puzzle, pool_size=12, seed=1, pairs=pairs)
     assert program is not None
     assert verify(puzzle, program) == len(program)
+
+
+@pytest.mark.parametrize("rebuild_every", [1, 3])
+def test_shouldProduceVerifiedProgramWhenPoolGrowsFromSolvedTargets(rebuild_every):
+    from elf_abacus.solvers.chain import solve
+
+    puzzle = Puzzle("p", [7, 19, 40], [48611, 902113, 55_000_001, 77_123_456], 10**9)
+    program = solve(puzzle, pool_size=8, seed=1, grow=True, rebuild_every=rebuild_every)
+    assert program is not None
+    assert verify(puzzle, program) == len(program)
+
+
+def test_shouldWriteSolvedTargetsToDistinctRegistersWhenPoolGrows():
+    from elf_abacus.solvers.chain import solve
+
+    puzzle = Puzzle("p", [7, 19, 40], [48611, 902113, 55_000_001], 10**9)
+    program = solve(puzzle, pool_size=8, seed=1, grow=True, rebuild_every=1)
+    assert program is not None
+    regs = dict(enumerate(puzzle.starting_values))
+    for op, i, j, d in program:
+        a, b = regs[i], regs[j]
+        regs[d] = {"+": a + b, "*": a * b, "-": a - b, "/": a // b if b else 0}[op]
+    # every target still sits in some register at the end: none was overwritten
+    assert all(t in regs.values() for t in puzzle.targets)
