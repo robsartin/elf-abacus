@@ -1,6 +1,6 @@
 # 0009. Product pair search: a second value one level deeper than the stored sets
 
-Status: Proposed (2026-11-20)
+Status: Accepted (2026-11-20)
 
 Extends ADR 0006; it does not change it.
 
@@ -36,3 +36,6 @@ Sample total (plain chain, pool 40, pairs on) 6,654 -> 6,578 (-1.1%) at 2.6x the
 38 s per puzzle). Of 31 targets whose best pair cost 9, 7 now cost 8; 5 of 16 cost-8 now cost 7 and
 4 of 58 cost-7 now cost 6. The 25 targets with no pair at all are unchanged. The code is the
 authority for the constants.
+
+## Amendment 2026-11-20 (integration)
+Merged in PR 9 and active whenever pairs are on. PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap.

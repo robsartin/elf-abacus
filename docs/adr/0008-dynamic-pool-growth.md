@@ -1,6 +1,6 @@
 # 0008. Dynamic pool growth from solved targets
 
-Status: Proposed (2026-11-20)
+Status: Accepted (2026-11-20)
 
 Extends ADR 0005; it does not change it.
 
@@ -32,3 +32,6 @@ CPU cost is high: about 8x plain pool 24 without pairs, 2.4x the pairs-on baseli
 `run.py` is not changed here; adding growth as a further portfolio variant is the follow-up.
 Plan intermediates and cheap accumulators as pool members were not tried. The code, not this
 ADR, is the authority for constants.
+
+## Amendment 2026-11-20 (integration)
+This corrects the Consequences line that `run.py` is not changed: PR 9 passes `grow=True` for the many-target route (`ChainRun.grow` in `router.py`), as a replacement for, not an addition to, the plain pool-40 run for those puzzles. PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap.
