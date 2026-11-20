@@ -39,12 +39,22 @@ class Sums:
     nterms: np.ndarray
 
 
+PAIR_ADD, PAIR_SUB, PAIR_RSUB = range(3)  # a + b, a - b, b - a
+MAX_PAIRS = 4_000_000  # candidate pairs expanded per search, which bounds memory
+PAIR_TERMS = (
+    2  # tail terms a pair may add; also bounds the window searched around the target
+)
+
+
 @dataclass(frozen=True)
 class Chain:
-    level: int  # forward operations before the additive tail (0, 1 or 2)
+    level: int  # forward operations before the additive tail (0, 1, 2 or 3)
     code: int
     terms: list[tuple[int, int]]  # (sign, pool index), additions first
     cost: int
+    second: tuple[int, int, int] | None = (
+        None  # (pair kind, level, code) of a second forward value
+    )
 
 
 def _dedupe(vals: np.ndarray, *carried: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -214,6 +224,95 @@ def find_chain(
     return best
 
 
+def _pair_windows(
+    a: np.ndarray, b: np.ndarray, target: int, kind: int, width: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each a, the slice of sorted `b` whose pair value lies within `width` of the target."""
+    if kind == PAIR_ADD:
+        centre = target - a
+    elif kind == PAIR_SUB:  # a - b near target  <=>  b near a - target
+        centre = a - target
+    else:  # b - a near target  <=>  b near target + a
+        centre = target + a
+    return (
+        np.searchsorted(b, centre - width, "left"),
+        np.searchsorted(b, centre + width, "right"),
+    )
+
+
+def find_pair(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+    max_pairs: int = MAX_PAIRS,
+) -> Chain | None:
+    """Cheapest `a +/- b + tail` over two forward values, or None if none costs under `max_cost`.
+
+    Two forward sets of a few operations each hold far more combinations than one forward set
+    times a short sum, so a near-miss pair plus one or two pool terms usually exists. For every
+    value of the smaller set only the window of the larger set that can land within the tail's
+    reach of the target is expanded, then each candidate gap is looked up in the sums.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    short = sums.nterms <= PAIR_TERMS
+    width = int(sums.vals[short].max())
+    best: Chain | None = None
+    levels = sorted(
+        ((la, lb) for la in range(len(forward)) for lb in range(la, len(forward))),
+        key=lambda pair: pair[0] + pair[1],
+    )
+    for la, lb in levels:
+        if la + lb + 1 >= bound:
+            break
+        small, large = forward[la], forward[lb]
+        kinds = (PAIR_ADD, PAIR_SUB) if la == lb else (PAIR_ADD, PAIR_SUB, PAIR_RSUB)
+        for kind in kinds:
+            reach = width
+            lo, hi = _pair_windows(small.vals, large.vals, target, kind, reach)
+            while int((hi - lo).sum()) > max_pairs and reach > 0:
+                reach //= 4  # a dense region: look only at pairs nearest the target
+                lo, hi = _pair_windows(small.vals, large.vals, target, kind, reach)
+            count = hi - lo
+            total = int(count.sum())
+            if total == 0:
+                continue
+            ia = np.repeat(np.arange(len(small.vals)), count)
+            ib = lo[ia] + np.arange(total) - (np.cumsum(count) - count)[ia]
+            av, bv = small.vals[ia], large.vals[ib]
+            base = (
+                av + bv
+                if kind == PAIR_ADD
+                else av - bv
+                if kind == PAIR_SUB
+                else bv - av
+            )
+            gap = target - base
+            pos = np.minimum(np.searchsorted(sums.vals, gap), len(sums.vals) - 1)
+            ok = (sums.vals[pos] == gap) & short[pos] & (base >= 1) & (base <= limit)
+            hits = np.nonzero(ok)[0]
+            for h in hits[np.argsort(sums.nterms[pos[hits]], kind="stable")[:25]]:
+                cost = la + lb + 1 + int(sums.nterms[pos[h]])
+                if cost >= bound:
+                    break
+                nterms = int(sums.nterms[pos[h]])
+                terms = decode_terms(int(sums.codes[pos[h]]), nterms)
+                terms.sort(key=lambda t: -t[0])
+                running = int(base[h])
+                legal = True
+                for sign, idx in terms:
+                    running += sign * pool[idx]
+                    legal = legal and running <= limit
+                if legal:
+                    code_a, code_b = int(small.codes[ia[h]]), int(large.codes[ib[h]])
+                    best = Chain(la, code_a, terms, cost, (kind, lb, code_b))
+                    bound = cost
+                    break
+    return best
+
+
 _SECOND_OPS = (
     lambda acc, rk: ["+", acc, rk, acc],
     lambda acc, rk: ["*", acc, rk, acc],
@@ -235,10 +334,28 @@ def _forward_ops(level: int, code: int, pool_regs: list[int], acc: int) -> list[
     return [*ops, _SECOND_OPS[(code >> 6) & 7](acc, pool_regs[code & 63])]
 
 
-def chain_program(chain: Chain, pool_regs: list[int], acc: int) -> list[list]:
-    """Instructions for `chain`, accumulating in register `acc` (pool registers are read-only)."""
+def chain_program(
+    chain: Chain, pool_regs: list[int], acc: int, tmp: int | None = None
+) -> list[list]:
+    """Instructions for `chain`, accumulating in register `acc` (pool registers are read-only).
+
+    A pair chain builds its second forward value in `tmp` and then joins the two into `acc`.
+    """
     ops = _forward_ops(chain.level, chain.code, pool_regs, acc)
     cur = pool_regs[chain.code] if chain.level == 0 else acc
+    if chain.second is not None:
+        if tmp is None:
+            raise ValueError("a pair chain needs a temporary register")
+        kind, level_b, code_b = chain.second
+        ops += _forward_ops(level_b, code_b, pool_regs, tmp)
+        other = pool_regs[code_b] if level_b == 0 else tmp
+        if kind == PAIR_ADD:
+            ops.append(["+", cur, other, acc])
+        elif kind == PAIR_SUB:
+            ops.append(["-", cur, other, acc])
+        else:
+            ops.append(["-", other, cur, acc])
+        cur = acc
     for sign, idx in chain.terms:
         ops.append(["+" if sign > 0 else "-", cur, pool_regs[idx], acc])
         cur = acc
@@ -247,7 +364,7 @@ def chain_program(chain: Chain, pool_regs: list[int], acc: int) -> list[list]:
 
 def chain_result_reg(chain: Chain, pool_regs: list[int], acc: int) -> int:
     """Register holding the chain's value once its instructions have run."""
-    if chain.level == 0 and not chain.terms:
+    if chain.level == 0 and not chain.terms and chain.second is None:
         return pool_regs[chain.code]
     return acc
 
@@ -269,7 +386,8 @@ class Plan:
 
     def program(self, pool_regs: list[int], accs: list[int]) -> list[list]:
         """Instructions, using one accumulator register per nesting level."""
-        ops = chain_program(self.first, pool_regs, accs[0])
+        tmp = accs[1] if len(accs) > 1 else None
+        ops = chain_program(self.first, pool_regs, accs[0], tmp)
         if self.rest is None:
             return ops
         ops += self.rest.program(pool_regs, accs[1:])
@@ -287,6 +405,7 @@ def plan_target(
     candidates: int = 8,
     max_cost: int | None = None,
     depth: int = 1,
+    pairs: bool = True,
 ) -> Plan | None:
     """Cheapest plan: a direct chain, or a nearby forward value plus a plan for the gap.
 
@@ -299,6 +418,13 @@ def plan_target(
     if direct is not None:
         best = Plan(direct, None, 1, direct.cost)
         bound = direct.cost
+    if (
+        pairs
+    ):  # only the outermost call: a pair search is far costlier than a chain search
+        pair = find_pair(target, pool, limit, forward, sums, bound)
+        if pair is not None:
+            best = Plan(pair, None, 1, pair.cost)
+            bound = pair.cost
     near: list[tuple[int, int, int]] = []
     for level, fw in enumerate(forward):
         if level + 2 > bound - 1:
@@ -316,7 +442,7 @@ def plan_target(
         sub_bound = bound - level - 1
         if depth > 1:
             remainder = plan_target(
-                gap, pool, limit, forward, sums, candidates, sub_bound, depth - 1
+                gap, pool, limit, forward, sums, candidates, sub_bound, depth - 1, False
             )
         else:
             chain = find_chain(gap, pool, limit, forward, sums, max_cost=sub_bound)
@@ -382,6 +508,7 @@ def solve(
     seed: int = 0,
     depth: int = 3,
     nesting: int = 3,
+    pairs: bool = True,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none."""
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
@@ -400,7 +527,7 @@ def solve(
         if target in covered:
             continue
         plan = plan_target(
-            target, pool, puzzle.value_limit, forward, sums, depth=nesting
+            target, pool, puzzle.value_limit, forward, sums, depth=nesting, pairs=pairs
         )
         if plan is None:
             return None

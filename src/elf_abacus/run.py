@@ -23,7 +23,11 @@ def _shortest(puzzle: Puzzle, programs: list[list[list] | None]) -> list[list] |
 
 def solve_one(puzzle: Puzzle) -> dict[str, list[list] | None]:
     """Every solver's best program for one puzzle (module-level so it can run in a worker)."""
-    chain_programs = [chain.solve(puzzle, pool_size=n) for n in CHAIN_POOL_SIZES]
+    chain_programs = [
+        chain.solve(puzzle, pool_size=n, pairs=pairs)
+        for pairs in (True, False)
+        for n in CHAIN_POOL_SIZES
+    ]
     return {
         "horner": horner.solve(puzzle),
         "chain": _shortest(puzzle, chain_programs),

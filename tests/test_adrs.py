@@ -20,6 +20,7 @@ REQUIRED_SLUGS = {
     "0003": "competition-data-never-committed",
     "0004": "apache-2-license",
     "0005": "numpy-meet-in-the-middle-chains",
+    "0006": "pair-search-and-solver-portfolio",
 }
 
 

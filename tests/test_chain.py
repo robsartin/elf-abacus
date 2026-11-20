@@ -8,6 +8,7 @@ from elf_abacus.solvers.chain import (
     decode_forward,
     decode_terms,
     find_chain,
+    find_pair,
     plan_target,
 )
 from elf_abacus.verifier import Puzzle, verify
@@ -203,3 +204,74 @@ def test_shouldNestResidualPlansWhenOneLevelIsNotEnough():
     assert plan is not None
     program = plan.program(pool_regs=[0, 1, 2], accs=[3, 4, 5])
     assert verify(Puzzle("p", pool, [411], 10**6), program) == plan.cost
+
+
+PAIR_POOL = [776, 1324, 1429, 53]
+
+
+def _pair_chain(target, **kwargs):
+    forward = build_forward(PAIR_POOL, 10**12, depth=2)
+    sums = build_sums(PAIR_POOL, 2)
+    return find_pair(target, PAIR_POOL, 10**12, forward, sums, **kwargs)
+
+
+def _replay(chain, target):
+    program = chain_program(chain, pool_regs=[0, 1, 2, 3], acc=4, tmp=5)
+    return verify(Puzzle("p", PAIR_POOL, [target], 10**12, registers=8), program)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_shouldJoinTwoForwardValuesWhenTargetIsTheirSumOrDifference(sign):
+    target = 776 * 1324 + sign * 1429 * 53
+    chain = _pair_chain(target)
+    assert chain is not None and chain.second is not None
+    assert chain.cost == 3  # one op per product, one to join them
+    assert _replay(chain, target) == 3
+
+
+def test_shouldAddTailTermsWhenPairIsOffByAPoolValue():
+    target = 776 * 1324 + 1429 * 53 + 776
+    chain = _pair_chain(target)
+    assert chain is not None and chain.second is not None
+    assert chain.cost == 4
+    assert _replay(chain, target) == 4
+
+
+def test_shouldReturnNoPairWhenCostBoundIsAlreadyBeaten():
+    target = 776 * 1324 + 1429 * 53
+    assert _pair_chain(target, max_cost=3) is None
+    assert _pair_chain(target, max_cost=4) is not None
+
+
+def test_shouldReturnNoPairWhenNoTwoForwardValuesReachTheTarget():
+    assert _pair_chain(10**11 + 7) is None
+
+
+def test_shouldPlanAPairWhenNoNearestForwardValueLeadsToAResidual():
+    """Residual planning with one candidate misses 776*1324 + 1429*53; a pair finds it."""
+    target = 776 * 1324 + 1429 * 53
+    forward = build_forward(PAIR_POOL, 10**12, depth=2)
+    sums = build_sums(PAIR_POOL, 1)
+    plan = plan_target(target, PAIR_POOL, 10**12, forward, sums, candidates=1, depth=1)
+    assert plan is not None and plan.cost == 3
+    program = plan.program(pool_regs=[0, 1, 2, 3], accs=[4, 5])
+    puzzle = Puzzle("p", PAIR_POOL, [target], 10**12, registers=8)
+    assert verify(puzzle, program) == 3
+
+
+def test_shouldStillFindAnExactPairWhenThePairBudgetIsTiny():
+    """A small budget narrows the window around the target but keeps exact pairs findable."""
+    target = 776 * 1324 + 1429 * 53
+    chain = _pair_chain(target, max_pairs=1)
+    assert chain is not None and chain.cost == 3
+    assert _replay(chain, target) == 3
+
+
+@pytest.mark.parametrize("pairs", [True, False])
+def test_shouldProduceVerifiedProgramWhenSolvingWithOrWithoutPairs(pairs):
+    from elf_abacus.solvers.chain import solve
+
+    puzzle = Puzzle("p", [7, 19, 40], [48611, 902113], 10**9)
+    program = solve(puzzle, pool_size=12, seed=1, pairs=pairs)
+    assert program is not None
+    assert verify(puzzle, program) == len(program)
