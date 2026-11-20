@@ -21,6 +21,7 @@ REQUIRED_SLUGS = {
     "0004": "apache-2-license",
     "0005": "numpy-meet-in-the-middle-chains",
     "0006": "pair-search-and-solver-portfolio",
+    "0007": "per-family-routing-and-seed-budget",
 }
 
 

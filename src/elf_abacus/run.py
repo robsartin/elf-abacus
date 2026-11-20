@@ -1,11 +1,10 @@
-"""Per-puzzle worker: every solver's best program (importable so process pools can pickle it)."""
+"""Per-puzzle worker: every routed solver's best program (importable so process pools can pickle it)."""
 
 from __future__ import annotations
 
+from elf_abacus.router import route
 from elf_abacus.solvers import chain, horner
 from elf_abacus.verifier import InvalidProgram, Puzzle, verify
-
-CHAIN_POOL_SIZES = (24, 32, 40)
 
 
 def _shortest(puzzle: Puzzle, programs: list[list[list] | None]) -> list[list] | None:
@@ -21,14 +20,14 @@ def _shortest(puzzle: Puzzle, programs: list[list[list] | None]) -> list[list] |
     return best
 
 
-def solve_one(puzzle: Puzzle) -> dict[str, list[list] | None]:
-    """Every solver's best program for one puzzle (module-level so it can run in a worker)."""
+def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:
+    """Each routed solver's best program for one puzzle (module-level so it can run in a worker)."""
+    plan = route(puzzle, seeds)
     chain_programs = [
-        chain.solve(puzzle, pool_size=n, pairs=pairs)
-        for pairs in (True, False)
-        for n in CHAIN_POOL_SIZES
+        chain.solve(puzzle, pool_size=c.pool_size, pairs=c.pairs, seed=c.seed)
+        for c in plan.chains
     ]
     return {
-        "horner": horner.solve(puzzle),
+        "horner": horner.solve(puzzle) if plan.horner else None,
         "chain": _shortest(puzzle, chain_programs),
     }
