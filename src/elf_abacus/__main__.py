@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 from elf_abacus.io import (
@@ -28,6 +29,12 @@ def main() -> None:
     parser.add_argument(
         "--limit", type=int, default=0, help="only the first N puzzles (testing)"
     )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=3,
+        help="chain runs (distinct constant pools) per many-target puzzle",
+    )
     args = parser.parse_args()
 
     puzzles = load_puzzles(args.puzzles)
@@ -35,7 +42,9 @@ def main() -> None:
         puzzles = puzzles[: args.limit]
     baseline = load_submission(args.baseline)
     with ProcessPoolExecutor(args.workers) as pool:
-        results = list(pool.map(solve_one, puzzles, chunksize=4))
+        results = list(
+            pool.map(partial(solve_one, seeds=args.seeds), puzzles, chunksize=4)
+        )
     candidates: dict[str, dict[str, list[list]]] = {}
     for puzzle, programs in zip(puzzles, results, strict=True):
         for name, program in programs.items():

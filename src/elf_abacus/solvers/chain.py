@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from elf_abacus.solvers import pairkernel
+from elf_abacus.solvers.pairkernel import PAIR_ADD, PAIR_RSUB, PAIR_SUB, ShortSums
 from elf_abacus.verifier import Puzzle
 
 ADD, MUL, SUB, DIV = range(4)
@@ -39,12 +41,22 @@ class Sums:
     nterms: np.ndarray
 
 
+MAX_PAIRS = 4_000_000  # candidate pairs expanded per search, which bounds memory
+LAZY_BUDGET = 200_000_000  # candidate pairs one lazy probe may scan (about a second)
+PAIR_TERMS = (
+    2  # tail terms a pair may add; also bounds the window searched around the target
+)
+
+
 @dataclass(frozen=True)
 class Chain:
-    level: int  # forward operations before the additive tail (0, 1 or 2)
+    level: int  # forward operations before the additive tail (0, 1, 2 or 3)
     code: int
     terms: list[tuple[int, int]]  # (sign, pool index), additions first
     cost: int
+    second: tuple[int, int, int] | None = (
+        None  # (pair kind, level, code) of a second forward value
+    )
 
 
 def _dedupe(vals: np.ndarray, *carried: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -214,6 +226,295 @@ def find_chain(
     return best
 
 
+def _cheapest_legal(
+    base: np.ndarray,
+    tail_pos: np.ndarray,
+    sums: Sums,
+    pool: list[int],
+    limit: int,
+    head_cost: int,
+    bound: int,
+) -> tuple[int, list[tuple[int, int]], int] | None:
+    """Cheapest hit (index, tail terms, cost) whose running value stays within `limit`.
+
+    Hit `h` joins the head value `base[h]` to the sums entry `tail_pos[h]`; only the 25 hits with
+    the fewest tail terms are tried, and none may cost `bound` or more.
+    """
+    for h in np.argsort(sums.nterms[tail_pos], kind="stable")[:25]:
+        nterms = int(sums.nterms[tail_pos[h]])
+        cost = head_cost + nterms
+        if cost >= bound:
+            return None
+        terms = decode_terms(int(sums.codes[tail_pos[h]]), nterms)
+        terms.sort(key=lambda t: -t[0])  # additions first keeps every step positive
+        running = int(base[h])
+        legal = True
+        for sign, idx in terms:
+            running += sign * pool[idx]
+            legal = legal and running <= limit
+        if legal:
+            return int(h), terms, cost
+    return None
+
+
+def find_pair(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+    max_pairs: int = MAX_PAIRS,
+    native: bool | None = None,
+) -> Chain | None:
+    """Cheapest `a +/- b + tail` over two forward values, or None if none costs under `max_cost`.
+
+    Two forward sets of a few operations each hold far more combinations than one forward set
+    times a short sum, so a near-miss pair plus one or two pool terms usually exists. For every
+    value of the smaller set only the window of the larger set that can land within the tail's
+    reach of the target is expanded, then each candidate gap is looked up in the sums.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    short = sums.nterms <= PAIR_TERMS
+    width = int(sums.vals[short].max())
+    short_pos = np.nonzero(short)[0]
+    short_sums = ShortSums(sums.vals[short_pos], sums.nterms[short_pos], short_pos)
+    use_native = pairkernel.native_available() if native is None else native
+    count_fn = (
+        pairkernel.window_count_native if use_native else pairkernel.window_count_numpy
+    )
+    hits_fn = pairkernel.hits_native if use_native else pairkernel.hits_numpy
+    best: Chain | None = None
+    levels = sorted(
+        ((la, lb) for la in range(len(forward)) for lb in range(la, len(forward))),
+        key=lambda pair: pair[0] + pair[1],
+    )
+    for la, lb in levels:
+        if la + lb + 1 >= bound:
+            break
+        small, large = forward[la], forward[lb]
+        kinds = (PAIR_ADD, PAIR_SUB) if la == lb else (PAIR_ADD, PAIR_SUB, PAIR_RSUB)
+        for kind in kinds:
+            reach = width
+            count = count_fn(small.vals, large.vals, target, kind, reach)
+            while count > max_pairs and reach > 0:
+                reach //= 4  # a dense region: look only at pairs nearest the target
+                count = count_fn(small.vals, large.vals, target, kind, reach)
+            if count == 0:
+                continue
+            found = hits_fn(
+                small.vals,
+                large.vals,
+                short_sums,
+                target,
+                kind,
+                reach,
+                limit,
+                min(PAIR_TERMS, bound - la - lb - 2),
+            )
+            ia, ib, pos = found.ia, found.ib, short_sums.pos[found.si]
+            av, bv = small.vals[ia], large.vals[ib]
+            base = (
+                av + bv
+                if kind == PAIR_ADD
+                else av - bv
+                if kind == PAIR_SUB
+                else bv - av
+            )
+            pick = _cheapest_legal(base, pos, sums, pool, limit, la + lb + 1, bound)
+            if pick is not None:
+                h, terms, cost = pick
+                code_a, code_b = int(small.codes[ia[h]]), int(large.codes[ib[h]])
+                best = Chain(la, code_a, terms, cost, (kind, lb, code_b))
+                bound = cost
+    return best
+
+
+def find_pair_lazy(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+    max_other: int = 300_000,
+    budget: int = LAZY_BUDGET,
+) -> Chain | None:
+    """Pair search whose first value has one more operation than any stored forward set.
+
+    That value is `top op pool` for every `top` in the deepest stored set; it is never stored, only
+    probed (see `pairkernel.lazy_hits_native`), so it needs the native kernel. It is joined to each
+    stored set of at most `max_other` values. Returns None when no such pair costs under
+    `max_cost`. Each probe scans at most `budget` candidate pairs, so dense targets cannot stall it.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    depth = len(forward)  # the lazy value's own level
+    short = sums.nterms <= PAIR_TERMS
+    width = int(sums.vals[short].max())
+    short_pos = np.nonzero(short)[0]
+    short_sums = ShortSums(sums.vals[short_pos], sums.nterms[short_pos], short_pos)
+    pool_arr = np.array(pool, dtype=np.int64)
+    top = forward[-1]
+    best: Chain | None = None
+    for lb in range(len(forward)):
+        if depth + lb + 1 >= bound:
+            break
+        other = forward[lb]
+        if len(other.vals) > max_other:
+            continue
+        for kind in (PAIR_ADD, PAIR_SUB, PAIR_RSUB):
+            found = pairkernel.lazy_hits_native(
+                top.vals,
+                pool_arr,
+                other.vals,
+                short_sums,
+                target,
+                kind,
+                width,
+                limit,
+                min(PAIR_TERMS, bound - depth - lb - 2),
+                budget=budget,
+            )
+            if len(found.ia) == 0:
+                continue
+            x, r = top.vals[found.ia], pool_arr[found.k]
+            safe_r, safe_x = np.maximum(r, 1), np.maximum(x, 1)
+            a = np.select(
+                [found.op == o for o in range(6)],
+                [x + r, x * r, x - r, r - x, x // safe_r, r // safe_x],
+            )
+            y = other.vals[found.ib]
+            base = a + y if kind == PAIR_ADD else a - y if kind == PAIR_SUB else y - a
+            pick = _cheapest_legal(
+                base, short_sums.pos[found.si], sums, pool, limit, depth + lb + 1, bound
+            )
+            if pick is not None:
+                h, terms, cost = pick
+                code = (int(top.codes[found.ia[h]]) * 8 + int(found.op[h])) * 64
+                code += int(found.k[h])
+                code_b = int(other.codes[found.ib[h]])
+                best = Chain(depth, code, terms, cost, (kind, lb, code_b))
+                bound = cost
+    return best
+
+
+MAX_PRODUCT_GRID = 8_000_000  # (first value, tail) combinations scanned per pass
+PRODUCT_SPAN = 3  # forward levels plus tail terms of the first value in a product pair
+
+
+def _legal_tail(
+    base: int, terms: list[tuple[int, int]], pool: list[int], limit: int
+) -> bool:
+    """True if applying `terms` to `base` never leaves 1..limit (additions run first)."""
+    running = base
+    for sign, idx in terms:
+        running += sign * pool[idx]
+        if not 1 <= running <= limit:
+            return False
+    return True
+
+
+def find_product_pair(
+    target: int,
+    pool: list[int],
+    limit: int,
+    forward: tuple[Forward, ...],
+    sums: Sums,
+    max_cost: int | None = None,
+) -> Chain | None:
+    """Cheapest `a +/- c + tail` where c is a top-level forward value times or divided by a pool value.
+
+    The stored forward sets stop one level short of c, so c is never enumerated. Instead each
+    candidate c = target -/+ a -/+ tail is derived from the other side and tested backwards: c is
+    a product `y * p` when p divides c and c / p is a stored value y, or a quotient `y // p` when
+    c * p is. Divisibility prunes almost every candidate, so one pass over a set of ~10^7 values
+    per pool value costs about a second.
+    """
+    bound = max_cost if max_cost is not None else 1 << 30
+    top = len(forward) - 1
+    c_level = top + 1
+    base_cost = c_level + 1  # building c from y, plus the join
+    ys = forward[top].vals
+    first_index: dict[int, int] = {}
+    for i, v in enumerate(pool):
+        if v > 1:
+            first_index.setdefault(v, i)
+    unique = list(first_index.items())
+    best: Chain | None = None
+    spans = sorted(
+        (
+            (la, t)
+            for la in range(top + 1)
+            for t in range(PAIR_TERMS + 1)
+            if la + t <= PRODUCT_SPAN
+        ),
+        key=lambda lt: lt[0] + lt[1],
+    )
+    for la, t in spans:
+        if base_cost + la + t >= bound:
+            break
+        a_set = forward[la]
+        tail_idx = np.nonzero(sums.nterms == t)[0]
+        if len(a_set.vals) * len(tail_idx) > MAX_PRODUCT_GRID:
+            continue
+        # gap = target - (a joined with c); the tail terms must supply it
+        for kind in (PAIR_ADD, PAIR_SUB, PAIR_RSUB):
+            av = a_set.vals[:, None]
+            gv = sums.vals[tail_idx][None, :]
+            # base = a join c must equal target - gap
+            want = target - gv
+            if kind == PAIR_ADD:
+                c = want - av
+            elif kind == PAIR_SUB:  # a - c = want
+                c = av - want
+            else:  # c - a = want
+                c = want + av
+            ia, js = np.nonzero((c > 0) & (c <= limit))
+            cvals = c[ia, js]
+            for pv, k in unique:
+                divisible = np.nonzero(cvals % pv == 0)[0]
+                small = np.nonzero(cvals <= limit // pv)[0]
+                for op2, rows, y in (
+                    (OP2_MUL, divisible, cvals[divisible] // pv),
+                    (OP2_DIVA, small, cvals[small] * pv),
+                ):
+                    pos = np.minimum(np.searchsorted(ys, y), len(ys) - 1)
+                    hit = rows[np.nonzero(ys[pos] == y)[0]]
+                    pos = pos[np.nonzero(ys[pos] == y)[0]]
+                    for j, h in enumerate(hit):
+                        a_idx, gap_idx = int(ia[h]), int(tail_idx[js[h]])
+                        nterms = int(sums.nterms[gap_idx])
+                        terms = decode_terms(int(sums.codes[gap_idx]), nterms)
+                        terms.sort(key=lambda x: -x[0])
+                        av_i, cv = int(a_set.vals[a_idx]), int(cvals[h])
+                        join = (
+                            av_i + cv
+                            if kind == PAIR_ADD
+                            else av_i - cv
+                            if kind == PAIR_SUB
+                            else cv - av_i
+                        )
+                        if not (
+                            1 <= join <= limit and _legal_tail(join, terms, pool, limit)
+                        ):
+                            continue
+                        code_b = (int(forward[top].codes[pos[j]]) << 9) | (op2 << 6) | k
+                        cost = base_cost + la + nterms
+                        if cost < bound:
+                            best = Chain(
+                                la,
+                                int(a_set.codes[a_idx]),
+                                terms,
+                                cost,
+                                (kind, c_level, code_b),
+                            )
+                            bound = cost
+                        break
+                    if best is not None and best.cost == base_cost + la + t:
+                        return best
+    return best
+
+
 _SECOND_OPS = (
     lambda acc, rk: ["+", acc, rk, acc],
     lambda acc, rk: ["*", acc, rk, acc],
@@ -235,10 +536,28 @@ def _forward_ops(level: int, code: int, pool_regs: list[int], acc: int) -> list[
     return [*ops, _SECOND_OPS[(code >> 6) & 7](acc, pool_regs[code & 63])]
 
 
-def chain_program(chain: Chain, pool_regs: list[int], acc: int) -> list[list]:
-    """Instructions for `chain`, accumulating in register `acc` (pool registers are read-only)."""
+def chain_program(
+    chain: Chain, pool_regs: list[int], acc: int, tmp: int | None = None
+) -> list[list]:
+    """Instructions for `chain`, accumulating in register `acc` (pool registers are read-only).
+
+    A pair chain builds its second forward value in `tmp` and then joins the two into `acc`.
+    """
     ops = _forward_ops(chain.level, chain.code, pool_regs, acc)
     cur = pool_regs[chain.code] if chain.level == 0 else acc
+    if chain.second is not None:
+        if tmp is None:
+            raise ValueError("a pair chain needs a temporary register")
+        kind, level_b, code_b = chain.second
+        ops += _forward_ops(level_b, code_b, pool_regs, tmp)
+        other = pool_regs[code_b] if level_b == 0 else tmp
+        if kind == PAIR_ADD:
+            ops.append(["+", cur, other, acc])
+        elif kind == PAIR_SUB:
+            ops.append(["-", cur, other, acc])
+        else:
+            ops.append(["-", other, cur, acc])
+        cur = acc
     for sign, idx in chain.terms:
         ops.append(["+" if sign > 0 else "-", cur, pool_regs[idx], acc])
         cur = acc
@@ -247,7 +566,7 @@ def chain_program(chain: Chain, pool_regs: list[int], acc: int) -> list[list]:
 
 def chain_result_reg(chain: Chain, pool_regs: list[int], acc: int) -> int:
     """Register holding the chain's value once its instructions have run."""
-    if chain.level == 0 and not chain.terms:
+    if chain.level == 0 and not chain.terms and chain.second is None:
         return pool_regs[chain.code]
     return acc
 
@@ -269,7 +588,8 @@ class Plan:
 
     def program(self, pool_regs: list[int], accs: list[int]) -> list[list]:
         """Instructions, using one accumulator register per nesting level."""
-        ops = chain_program(self.first, pool_regs, accs[0])
+        tmp = accs[1] if len(accs) > 1 else None
+        ops = chain_program(self.first, pool_regs, accs[0], tmp)
         if self.rest is None:
             return ops
         ops += self.rest.program(pool_regs, accs[1:])
@@ -287,6 +607,8 @@ def plan_target(
     candidates: int = 8,
     max_cost: int | None = None,
     depth: int = 1,
+    pairs: bool = True,
+    lazy: bool = False,
 ) -> Plan | None:
     """Cheapest plan: a direct chain, or a nearby forward value plus a plan for the gap.
 
@@ -299,6 +621,22 @@ def plan_target(
     if direct is not None:
         best = Plan(direct, None, 1, direct.cost)
         bound = direct.cost
+    if (
+        pairs
+    ):  # only the outermost call: a pair search is far costlier than a chain search
+        pair = find_pair(target, pool, limit, forward, sums, bound)
+        if pair is not None:
+            best = Plan(pair, None, 1, pair.cost)
+            bound = pair.cost
+        if lazy:
+            deeper = find_pair_lazy(target, pool, limit, forward, sums, bound)
+            if deeper is not None:
+                best = Plan(deeper, None, 1, deeper.cost)
+                bound = deeper.cost
+        product = find_product_pair(target, pool, limit, forward, sums, bound)
+        if product is not None:
+            best = Plan(product, None, 1, product.cost)
+            bound = product.cost
     near: list[tuple[int, int, int]] = []
     for level, fw in enumerate(forward):
         if level + 2 > bound - 1:
@@ -316,7 +654,7 @@ def plan_target(
         sub_bound = bound - level - 1
         if depth > 1:
             remainder = plan_target(
-                gap, pool, limit, forward, sums, candidates, sub_bound, depth - 1
+                gap, pool, limit, forward, sums, candidates, sub_bound, depth - 1, False
             )
         else:
             chain = find_chain(gap, pool, limit, forward, sums, max_cost=sub_bound)
@@ -382,28 +720,62 @@ def solve(
     seed: int = 0,
     depth: int = 3,
     nesting: int = 3,
+    pairs: bool = True,
+    lazy: bool = False,
+    grow: bool = False,
+    rebuild_every: int = 4,
 ) -> list[list] | None:
-    """Chain solver: a pool of constants, then one plan per target; None if a target has none."""
+    """Chain solver: a pool of constants, then one plan per target; None if a target has none.
+
+    With `grow`, every solved target is kept in its own register and joins the pool as a free
+    term for later targets, once `rebuild_every` of them are waiting; the search sets are then
+    rebuilt. The accumulators sit at the top of the register file so the pool can grow below them.
+    """
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
         return None
     pool, pool_regs, program = make_pool(
         puzzle, pool_size, random.Random(seed), reserve=nesting + 1
     )
-    first_acc = len(puzzle.starting_values) + len(program)
+    first_acc = (
+        puzzle.registers - nesting - 1
+        if grow
+        else len(puzzle.starting_values) + len(program)
+    )
     accs = list(range(first_acc, first_acc + nesting + 1))
     if accs[-1] >= puzzle.registers:
         return None
-    forward = build_forward(pool, puzzle.value_limit, depth=depth, max_rows=100_000)
+    limit = puzzle.value_limit
+    forward = build_forward(pool, limit, depth=depth, max_rows=100_000)
     sums = build_sums(pool, max_terms)
     covered = set(pool)
+    next_reg = len(puzzle.starting_values) + len(program)
+    waiting = 0
     for target in puzzle.targets:
         if target in covered:
             continue
         plan = plan_target(
-            target, pool, puzzle.value_limit, forward, sums, depth=nesting
+            target,
+            pool,
+            limit,
+            forward,
+            sums,
+            depth=nesting,
+            pairs=pairs,
+            lazy=lazy and pairkernel.native_available(),
         )
         if plan is None:
             return None
-        program += plan.program(pool_regs, accs)
+        ops = plan.program(pool_regs, accs)
         covered.add(target)
+        if grow and next_reg < accs[0] and len(pool) < 63:
+            ops[-1][3] = next_reg  # the plan's last instruction writes the target
+            pool.append(target)
+            pool_regs.append(next_reg)
+            next_reg += 1
+            waiting += 1
+        program += ops
+        if waiting >= rebuild_every:
+            forward = build_forward(pool, limit, depth=depth, max_rows=100_000)
+            sums = build_sums(pool, max_terms)
+            waiting = 0
     return program
