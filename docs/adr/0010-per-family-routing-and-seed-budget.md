@@ -1,6 +1,6 @@
 # 0010. Route solvers by puzzle features and spend the saved time on seeds
 
-Status: Proposed (2026-11-20)
+Status: Accepted (2026-11-20)
 
 Extends ADR 0006; it does not change it.
 
@@ -41,3 +41,6 @@ there. `run.solve_one` executes the route; the shortest verified program still w
 On the sample, route plus 3 seeds scores 5,531 (-1.5% against 5,613) in about the same CPU time
 as the full portfolio (1,425 s against 1,462 s); route plus 1 seed scores 5,558 in 40% of it. The
 threshold and pool sizes are in code; this ADR records why, not the values.
+
+## Amendment 2026-11-20 (integration)
+This corrects the Decision: for many-target puzzles the route's chain runs use pool growth (`grow=True`), so they are no longer plain pool-40 pair chains. The sample numbers above predate growth and are not the whole-set effect. PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap.

@@ -1,6 +1,6 @@
 # 0007. A C kernel for the pair search, loaded with ctypes, NumPy kept as the fallback
 
-Status: Proposed (2026-11-20)
+Status: Accepted (2026-11-20)
 
 Extends ADR 0005 and ADR 0006; it supersedes the "Rust or C++ extension" rejection in ADR 0005,
 which said to revisit if the search had to grow.
@@ -67,3 +67,6 @@ the lazy probe, which should be added to `src/elf_abacus/run.py` only after a wh
 pays. Open risk: a compiler difference could change hit order on overflow of the hit cap
 (`DEFAULT_HIT_CAP`); below the cap the parity test shows identical results. The code is the
 authority for constants (`LAZY_BUDGET`, `PAIR_TERMS`, the flags in `pairkernel.py`).
+
+## Amendment 2026-11-20 (integration)
+PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap. `run.solve_one` now passes `lazy=True` for every chain run (it falls back to NumPy when the native kernel is unavailable). That whole-set run enabled lazy together with the other three, so the lazy probe's own contribution was not isolated; the sentence above about adding it only after a whole-set run that shows it pays was not met in isolation.
