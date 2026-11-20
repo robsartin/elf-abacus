@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from elf_abacus.solvers import pairkernel
+from elf_abacus.solvers.pairkernel import PAIR_ADD, PAIR_RSUB, PAIR_SUB, ShortSums
 from elf_abacus.verifier import Puzzle
 
 ADD, MUL, SUB, DIV = range(4)
@@ -39,7 +41,6 @@ class Sums:
     nterms: np.ndarray
 
 
-PAIR_ADD, PAIR_SUB, PAIR_RSUB = range(3)  # a + b, a - b, b - a
 MAX_PAIRS = 4_000_000  # candidate pairs expanded per search, which bounds memory
 PAIR_TERMS = (
     2  # tail terms a pair may add; also bounds the window searched around the target
@@ -224,22 +225,6 @@ def find_chain(
     return best
 
 
-def _pair_windows(
-    a: np.ndarray, b: np.ndarray, target: int, kind: int, width: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """For each a, the slice of sorted `b` whose pair value lies within `width` of the target."""
-    if kind == PAIR_ADD:
-        centre = target - a
-    elif kind == PAIR_SUB:  # a - b near target  <=>  b near a - target
-        centre = a - target
-    else:  # b - a near target  <=>  b near target + a
-        centre = target + a
-    return (
-        np.searchsorted(b, centre - width, "left"),
-        np.searchsorted(b, centre + width, "right"),
-    )
-
-
 def find_pair(
     target: int,
     pool: list[int],
@@ -248,6 +233,7 @@ def find_pair(
     sums: Sums,
     max_cost: int | None = None,
     max_pairs: int = MAX_PAIRS,
+    native: bool | None = None,
 ) -> Chain | None:
     """Cheapest `a +/- b + tail` over two forward values, or None if none costs under `max_cost`.
 
@@ -259,6 +245,13 @@ def find_pair(
     bound = max_cost if max_cost is not None else 1 << 30
     short = sums.nterms <= PAIR_TERMS
     width = int(sums.vals[short].max())
+    short_pos = np.nonzero(short)[0]
+    short_sums = ShortSums(sums.vals[short_pos], sums.nterms[short_pos], short_pos)
+    use_native = pairkernel.native_available() if native is None else native
+    count_fn = (
+        pairkernel.window_count_native if use_native else pairkernel.window_count_numpy
+    )
+    hits_fn = pairkernel.hits_native if use_native else pairkernel.hits_numpy
     best: Chain | None = None
     levels = sorted(
         ((la, lb) for la in range(len(forward)) for lb in range(la, len(forward))),
@@ -271,16 +264,23 @@ def find_pair(
         kinds = (PAIR_ADD, PAIR_SUB) if la == lb else (PAIR_ADD, PAIR_SUB, PAIR_RSUB)
         for kind in kinds:
             reach = width
-            lo, hi = _pair_windows(small.vals, large.vals, target, kind, reach)
-            while int((hi - lo).sum()) > max_pairs and reach > 0:
+            count = count_fn(small.vals, large.vals, target, kind, reach)
+            while count > max_pairs and reach > 0:
                 reach //= 4  # a dense region: look only at pairs nearest the target
-                lo, hi = _pair_windows(small.vals, large.vals, target, kind, reach)
-            count = hi - lo
-            total = int(count.sum())
-            if total == 0:
+                count = count_fn(small.vals, large.vals, target, kind, reach)
+            if count == 0:
                 continue
-            ia = np.repeat(np.arange(len(small.vals)), count)
-            ib = lo[ia] + np.arange(total) - (np.cumsum(count) - count)[ia]
+            found = hits_fn(
+                small.vals,
+                large.vals,
+                short_sums,
+                target,
+                kind,
+                reach,
+                limit,
+                min(PAIR_TERMS, bound - la - lb - 2),
+            )
+            ia, ib, pos = found.ia, found.ib, short_sums.pos[found.si]
             av, bv = small.vals[ia], large.vals[ib]
             base = (
                 av + bv
@@ -289,11 +289,8 @@ def find_pair(
                 if kind == PAIR_SUB
                 else bv - av
             )
-            gap = target - base
-            pos = np.minimum(np.searchsorted(sums.vals, gap), len(sums.vals) - 1)
-            ok = (sums.vals[pos] == gap) & short[pos] & (base >= 1) & (base <= limit)
-            hits = np.nonzero(ok)[0]
-            for h in hits[np.argsort(sums.nterms[pos[hits]], kind="stable")[:25]]:
+            hits = np.arange(len(ia))
+            for h in hits[np.argsort(sums.nterms[pos], kind="stable")[:25]]:
                 cost = la + lb + 1 + int(sums.nterms[pos[h]])
                 if cost >= bound:
                     break
