@@ -9,7 +9,7 @@ from elf_abacus.verifier import Puzzle
 # From the per-variant win table in ADR 0010: with this many targets the largest pool with pair
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
-BIG_POOL = 36
+BIG_POOL = 16
 SMALL_POOLS = (24, 32, 40)
 
 
@@ -29,6 +29,7 @@ class ChainRun:
     seed: int
     grow: bool = False
     relate: bool = False
+    keep_inner: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
         return Route(
             True,
             tuple(
-                ChainRun(BIG_POOL, True, seed, grow=True, relate=True)
+                ChainRun(BIG_POOL, True, seed, grow=True, relate=True, keep_inner=True)
                 for seed in range(seeds)
             ),
         )

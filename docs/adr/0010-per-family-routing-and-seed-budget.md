@@ -51,3 +51,6 @@ The amendment above states that PR 9 wired pool growth into `run.solve_one`. Tha
 that was meant to do it matched nothing, so `run.solve_one` passed neither, and the whole-set run of
 218,259 (218,127 best-of, Kaggle-confirmed) used neither pool growth nor the lazy probe. Its gain came from
 the routing, the product pairs and the native kernel. The route for many-target puzzles is now pool 36 with growth and relate (ADR 0011), chosen because pool 36 with growth and relate beat pool 40 with growth by 2.4-2.8% on the sample; the code is the authority for the pool size.
+
+## Amendment 2026-11-21 (route)
+The many-target route is now pool 16 with growth, relate (ADR 0011) and `keep_inner` (ADR 0013): on the 28-puzzle sample 5,038 and 5,012 (seeds 0 and 1) against 5,356 for pool 36 with growth and relate. Pool 12 left a puzzle unsolved, so 16 is the floor measured. The code is the authority for the pool size.

@@ -31,6 +31,7 @@ def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:
             seed=c.seed,
             grow=c.grow,
             relate=c.relate,
+            keep_inner=c.keep_inner,
         )
         for c in plan.chains
     ]

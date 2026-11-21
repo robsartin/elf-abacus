@@ -18,14 +18,16 @@ def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     plan = route(BIG, seeds=1)
     assert plan.horner
     assert plan.chains == (
-        ChainRun(pool_size=36, pairs=True, seed=0, grow=True, relate=True),
+        ChainRun(
+            pool_size=16, pairs=True, seed=0, grow=True, relate=True, keep_inner=True
+        ),
     )
 
 
 def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(36, True)}
+    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(16, True)}
 
 
 def test_shouldKeepFullChainPortfolioWhenFewTargets():
@@ -54,7 +56,7 @@ def test_shouldRunOneChainPerSeedWhenSolvingBigPuzzle(monkeypatch):
     assert seen == [0, 1]
 
 
-def test_shouldPassRelateAndGrowToTheChainSolverWhenRunningARoute(monkeypatch):
+def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monkeypatch):
     from elf_abacus import run
     from elf_abacus.router import Route
     from elf_abacus.verifier import Puzzle
@@ -69,10 +71,17 @@ def test_shouldPassRelateAndGrowToTheChainSolverWhenRunningARoute(monkeypatch):
         run,
         "route",
         lambda puzzle, seeds: Route(
-            False, (ChainRun(36, True, 1, grow=True, relate=True),)
+            False, (ChainRun(36, True, 1, grow=True, relate=True, keep_inner=True),)
         ),
     )
     run.solve_one(Puzzle("p", [3], [5], 100))
     assert seen == [
-        {"pool_size": 36, "pairs": True, "seed": 1, "grow": True, "relate": True}
+        {
+            "pool_size": 36,
+            "pairs": True,
+            "seed": 1,
+            "grow": True,
+            "relate": True,
+            "keep_inner": True,
+        }
     ]
