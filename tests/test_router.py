@@ -17,22 +17,37 @@ def test_shouldReportPuzzleFeaturesWhenGivenAPuzzle():
 def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     plan = route(BIG, seeds=1)
     assert plan.horner
-    assert plan.chains == (ChainRun(pool_size=40, pairs=True, seed=0, grow=True),)
+    assert plan.chains == (
+        ChainRun(
+            pool_size=10,
+            pairs=True,
+            seed=0,
+            grow=True,
+            relate=True,
+            keep_inner=True,
+            retain=True,
+        ),
+    )
 
 
 def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(40, True)}
+    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(10, True)}
 
 
-def test_shouldKeepFullChainPortfolioWhenFewTargets():
+def test_shouldRunGrowRelateKeepInnerSmallPoolsWhenFewTargets():
     plan = route(SMALL, seeds=3)
     assert plan.horner
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {
-        (n, p) for n in (24, 32, 40) for p in (True, False)
-    }
-    assert all(c.seed == 0 for c in plan.chains)
+    grown = [c for c in plan.chains if c.grow]
+    assert {c.pool_size for c in grown} == {6, 8, 10}
+    assert {c.seed for c in grown} == {0, 1}
+    assert all(c.pairs and c.relate and c.keep_inner for c in grown)
+
+
+def test_shouldKeepACheapNoGrowFallbackWhenFewTargets():
+    plan = route(SMALL, seeds=3)
+    assert ChainRun(pool_size=24, pairs=True, seed=0) in plan.chains
 
 
 def test_shouldSolveSmallPuzzleThroughRouterWhenRunning():
@@ -49,4 +64,75 @@ def test_shouldRunOneChainPerSeedWhenSolvingBigPuzzle(monkeypatch):
     )
     monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
     run.solve_one(BIG, seeds=2)
-    assert seen == [0, 1]
+    assert seen[:2] == [0, 1]
+
+
+def test_shouldRouteLargerGrownPoolsAsFallbackWhenPuzzleIsBig():
+    plan = route(BIG, seeds=1)
+    assert [c.pool_size for c in plan.fallback] == [16, 24]
+    assert all(c.grow and c.relate and c.keep_inner and c.retain for c in plan.fallback)
+
+
+def test_shouldHaveNoFallbackWhenFewTargets():
+    assert route(SMALL, seeds=1).fallback == ()
+
+
+def test_shouldRunFallbackOnlyWhenPrimaryChainsFindNothing(monkeypatch):
+    pools = []
+
+    def fake_solve(puzzle, **kw):
+        pools.append(kw["pool_size"])
+        return [["+", 0, 1, 2]] if kw["pool_size"] == 16 else None
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
+    monkeypatch.setattr(run, "verify", lambda puzzle, program: None)
+    results = run.solve_one(BIG, seeds=2)
+    assert pools == [10, 10, 16]
+    assert results["chain"] == [["+", 0, 1, 2]]
+
+
+def test_shouldSkipFallbackWhenPrimaryChainSucceeds(monkeypatch):
+    pools = []
+
+    def fake_solve(puzzle, **kw):
+        pools.append(kw["pool_size"])
+        return [["+", 0, 1, 2]]
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
+    monkeypatch.setattr(run, "verify", lambda puzzle, program: None)
+    run.solve_one(BIG, seeds=1)
+    assert pools == [10]
+
+
+def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monkeypatch):
+    from elf_abacus import run
+    from elf_abacus.router import Route
+    from elf_abacus.verifier import Puzzle
+
+    seen = []
+
+    def fake_solve(puzzle, **kwargs):
+        seen.append(kwargs)
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(
+        run,
+        "route",
+        lambda puzzle, seeds: Route(
+            False, (ChainRun(36, True, 1, grow=True, relate=True, keep_inner=True),)
+        ),
+    )
+    run.solve_one(Puzzle("p", [3], [5], 100))
+    assert seen == [
+        {
+            "pool_size": 36,
+            "pairs": True,
+            "seed": 1,
+            "grow": True,
+            "relate": True,
+            "keep_inner": True,
+            "retain": False,
+        }
+    ]
