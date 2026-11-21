@@ -30,6 +30,7 @@ class ChainRun:
     grow: bool = False
     relate: bool = False
     keep_inner: bool = False
+    retain: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,15 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
         return Route(
             True,
             tuple(
-                ChainRun(BIG_POOL, True, seed, grow=True, relate=True, keep_inner=True)
+                ChainRun(
+                    BIG_POOL,
+                    True,
+                    seed,
+                    grow=True,
+                    relate=True,
+                    keep_inner=True,
+                    retain=True,
+                )
                 for seed in range(seeds)
             ),
         )

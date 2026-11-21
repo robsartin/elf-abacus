@@ -28,6 +28,7 @@ REQUIRED_SLUGS = {
     "0011": "target-relations-delta-plans",
     "0012": "verified-peephole-post-pass",
     "0013": "intermediate-pool-members-and-target-order",
+    "0014": "lookahead-retention-of-full-registers",
 }
 
 

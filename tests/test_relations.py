@@ -85,3 +85,44 @@ def test_shouldReportWhetherALaterTargetIsCloseWhenAskingIfWantedAsBase():
     assert wanted_as_base([100, 101, 5000], 0)
     assert not wanted_as_base([100, 101, 5000], 1)
     assert not wanted_as_base([100, 101, 5000], 2)
+
+
+def test_shouldCountRemainingTargetsNearAValueWhenScoringLookahead():
+    from elf_abacus.solvers.relations import lookahead
+
+    assert lookahead(100, [101, 99, 5000]) == 2
+    assert lookahead(100, [5000, 7000]) == 0
+
+
+def test_shouldPickLeastUsefulNonStartingValueWhenCandidateBeatsIt():
+    from elf_abacus.solvers.relations import pick_victim
+
+    pool = [3, 4, 1000, 70_000, 5_000_000]
+    remaining = [1001, 1002, 70_001]
+    # index 2 and 3 are useful, 4 is not; two starting values are protected
+    assert pick_victim(pool, 2, remaining, candidate=1003) == 4
+
+
+def test_shouldPickNoVictimWhenCandidateIsNoMoreUsefulThanEveryOne():
+    from elf_abacus.solvers.relations import pick_victim
+
+    pool = [3, 4, 1000, 70_000]
+    assert pick_victim(pool, 2, [1001, 70_001], candidate=9_999_999) is None
+
+
+def test_shouldPreferOldestWhenSeveralValuesAreEquallyUseless():
+    from elf_abacus.solvers.relations import pick_victim
+
+    pool = [3, 4, 500, 900, 1000]
+    assert pick_victim(pool, 2, [1001, 1002], candidate=1003) == 2
+
+
+def test_shouldStayValidWhenRetainOverwritesRegistersOnceTheyAreFull():
+    base = 48_611_207
+    targets = [base + 17 * k * (k + 3) for k in range(12)]
+    puzzle = Puzzle("p", [7, 19, 40], targets, 10**12, registers=16)
+    program = solve(
+        puzzle, pool_size=5, seed=2, pairs=False, grow=True, relate=True, retain=True
+    )
+    assert program is not None
+    assert verify(puzzle, program) == len(program)

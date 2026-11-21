@@ -19,7 +19,13 @@ def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     assert plan.horner
     assert plan.chains == (
         ChainRun(
-            pool_size=16, pairs=True, seed=0, grow=True, relate=True, keep_inner=True
+            pool_size=16,
+            pairs=True,
+            seed=0,
+            grow=True,
+            relate=True,
+            keep_inner=True,
+            retain=True,
         ),
     )
 
@@ -83,5 +89,6 @@ def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monke
             "grow": True,
             "relate": True,
             "keep_inner": True,
+            "retain": False,
         }
     ]

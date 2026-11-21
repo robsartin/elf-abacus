@@ -781,6 +781,7 @@ def solve(
     rebuild_every: int = 4,
     relate: bool = False,
     keep_inner: bool = False,
+    retain: bool = False,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none.
 
@@ -788,13 +789,15 @@ def solve(
     term for later targets, once `rebuild_every` of them are waiting; the search sets are then
     rebuilt. The accumulators sit at the top of the register file so the pool can grow below them.
     With `keep_inner` (needs `grow`), the new values a plan computes on the way also keep a
-    register each while any are free.
+    register each while any are free. With `retain` (needs `grow`), once every register is taken a
+    new target overwrites the pool value that the remaining targets are least near, if it is
+    nearer to more of them (see `relations.pick_victim`).
 
     With `relate`, a target that sits near an earlier one may instead be built as that earlier
     target plus or minus a small gap (see `relations`). The registers left free above the
     accumulators keep the targets that later ones are close to, oldest overwritten first.
     """
-    from elf_abacus.solvers.relations import plan_delta, wanted_as_base
+    from elf_abacus.solvers.relations import pick_victim, plan_delta, wanted_as_base
 
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
         return None
@@ -867,6 +870,16 @@ def solve(
                     covered.add(value)
                 next_reg += len(saved)
                 waiting += len(saved)
+        elif grow and retain:
+            remaining = [u for u in puzzle.targets[index + 1 :] if u not in covered]
+            victim = pick_victim(pool, len(puzzle.starting_values), remaining, target)
+            if victim is not None:
+                reg = pool_regs[victim]
+                ops[-1][3] = reg
+                bases.pop(pool[victim], None)
+                pool[victim] = target
+                bases[target] = reg
+                waiting = rebuild_every  # the search sets name the evicted value
         program += ops
         if waiting >= rebuild_every:
             forward = build_forward(pool, limit, depth=depth, max_rows=100_000)

@@ -71,3 +71,26 @@ def wanted_as_base(targets: list[int], index: int, closeness: float = 0.05) -> b
     """Whether some later target is within `closeness` (relative) of targets[index]."""
     t = targets[index]
     return any(abs(u - t) < u * closeness for u in targets[index + 1 :])
+
+
+def lookahead(value: int, remaining: list[int], closeness: float = 0.05) -> int:
+    """How many of the `remaining` targets lie within `closeness` (relative) of `value`."""
+    return sum(1 for u in remaining if abs(u - value) < u * closeness)
+
+
+def pick_victim(
+    pool: list[int], protected: int, remaining: list[int], candidate: int
+) -> int | None:
+    """Index of the pool value to overwrite with `candidate`, or None to leave it unkept.
+
+    The first `protected` entries (the starting values) are never chosen. The victim is the value
+    with the lowest lookahead, oldest first among ties, and only if the candidate's is higher.
+    """
+    best: tuple[int, int] | None = None
+    for index in range(protected, len(pool)):
+        score = lookahead(pool[index], remaining)
+        if best is None or score < best[0]:
+            best = (score, index)
+    if best is None or lookahead(candidate, remaining) <= best[0]:
+        return None
+    return best[1]
