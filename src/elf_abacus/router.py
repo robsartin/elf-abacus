@@ -28,6 +28,7 @@ class ChainRun:
     pairs: bool
     seed: int
     grow: bool = False
+    relate: bool = False
 
 
 @dataclass(frozen=True)
