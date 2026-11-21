@@ -724,13 +724,20 @@ def solve(
     lazy: bool = False,
     grow: bool = False,
     rebuild_every: int = 4,
+    relate: bool = False,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none.
 
     With `grow`, every solved target is kept in its own register and joins the pool as a free
     term for later targets, once `rebuild_every` of them are waiting; the search sets are then
     rebuilt. The accumulators sit at the top of the register file so the pool can grow below them.
+
+    With `relate`, a target that sits near an earlier one may instead be built as that earlier
+    target plus or minus a small gap (see `relations`). The registers left free above the
+    accumulators keep the targets that later ones are close to, oldest overwritten first.
     """
+    from elf_abacus.solvers.relations import plan_delta, wanted_as_base
+
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
         return None
     pool, pool_regs, program = make_pool(
@@ -750,7 +757,10 @@ def solve(
     covered = set(pool)
     next_reg = len(puzzle.starting_values) + len(program)
     waiting = 0
-    for target in puzzle.targets:
+    bases: dict[int, int] = {}  # solved target value -> register still holding it
+    keep = list(range(accs[-1] + 1, puzzle.registers)) if relate else []
+    kept: list[int] = []  # values in `keep` registers, oldest first
+    for index, target in enumerate(puzzle.targets):
         if target in covered:
             continue
         plan = plan_target(
@@ -766,11 +776,26 @@ def solve(
         if plan is None:
             return None
         ops = plan.program(pool_regs, accs)
+        if relate and bases:
+            delta = plan_delta(
+                target, bases, pool, limit, forward, sums, plan.cost, nesting
+            )
+            if delta is not None:
+                ops = delta.program(pool_regs, accs, accs[0])
+        if keep and wanted_as_base(puzzle.targets, index):
+            slot = keep[len(kept) % len(keep)] if len(kept) < len(keep) else None
+            if slot is None:
+                old = kept.pop(0)
+                slot = bases.pop(old)
+            kept.append(target)
+            bases[target] = slot
+            ops[-1][3] = slot
         covered.add(target)
         if grow and next_reg < accs[0] and len(pool) < 63:
             ops[-1][3] = next_reg  # the plan's last instruction writes the target
             pool.append(target)
             pool_regs.append(next_reg)
+            bases[target] = pool_regs[-1]
             next_reg += 1
             waiting += 1
         program += ops

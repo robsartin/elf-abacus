@@ -50,3 +50,27 @@ def test_shouldRunOneChainPerSeedWhenSolvingBigPuzzle(monkeypatch):
     monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
     run.solve_one(BIG, seeds=2)
     assert seen == [0, 1]
+
+
+def test_shouldPassRelateAndGrowToTheChainSolverWhenRunningARoute(monkeypatch):
+    from elf_abacus import run
+    from elf_abacus.router import Route
+    from elf_abacus.verifier import Puzzle
+
+    seen = []
+
+    def fake_solve(puzzle, **kwargs):
+        seen.append(kwargs)
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(
+        run,
+        "route",
+        lambda puzzle, seeds: Route(
+            False, (ChainRun(36, True, 1, grow=True, relate=True),)
+        ),
+    )
+    run.solve_one(Puzzle("p", [3], [5], 100))
+    assert seen == [
+        {"pool_size": 36, "pairs": True, "seed": 1, "grow": True, "relate": True}
+    ]

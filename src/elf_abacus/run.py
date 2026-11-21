@@ -24,7 +24,14 @@ def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:
     """Each routed solver's best program for one puzzle (module-level so it can run in a worker)."""
     plan = route(puzzle, seeds)
     chain_programs = [
-        chain.solve(puzzle, pool_size=c.pool_size, pairs=c.pairs, seed=c.seed)
+        chain.solve(
+            puzzle,
+            pool_size=c.pool_size,
+            pairs=c.pairs,
+            seed=c.seed,
+            grow=c.grow,
+            relate=c.relate,
+        )
         for c in plan.chains
     ]
     return {
