@@ -148,49 +148,152 @@ def _consumer_forms(v: int, x: int) -> Iterator[tuple[str, int, bool]]:
     yield "/", v * x, False
 
 
-def _rederive_with_helper(
+def _private_chain(
+    nodes: list[_Node], roots: set[int], consumers: dict[int, list[int]], w: int
+) -> set[int]:
+    """Non-target operation nodes that die if w stops reading its operands (w itself stays)."""
+    dead: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        stack = [nodes[w].a, nodes[w].b]
+        seen: set[int] = set()
+        while stack:
+            n = stack.pop()
+            if n in seen or n == w:
+                continue
+            seen.add(n)
+            if n in dead:
+                stack += (nodes[n].a, nodes[n].b)
+            elif (
+                nodes[n].op is not None
+                and n not in roots
+                and all(c in dead or c == w for c in consumers[n])
+            ):
+                dead.add(n)
+                changed = True
+                stack += (nodes[n].a, nodes[n].b)
+    return dead
+
+
+_Plan = tuple[list[tuple[int, str, int, int]], str, tuple[int, int]]
+
+
+def _rebuilds(
+    nodes: list[_Node],
+    w: int,
+    pool: dict[int, int],
+    index: dict[int, list[tuple[str, int, int]]],
+    blocked: set[int],
+    limit: int,
+    new_values: int,
+    reaches: Callable[[int], set[int]],
+) -> Iterator[_Plan]:
+    """Ways to rebuild nodes[w] from `pool` plus exactly `new_values` new values.
+
+    A plan is (new nodes as (value, op, a, b) with -1 / -2 naming the first / second new node
+    in w's operands, w's new op, w's new operands). Operands never lead back to w, and the pair
+    behind a new value avoids `blocked`.
+    """
+    v = nodes[w].value
+
+    def usable(p: int, q: int) -> bool:
+        return not (p in blocked or q in blocked or w in (p, q)) and not (
+            w in reaches(p) or w in reaches(q)
+        )
+
+    for x_value, x in pool.items():
+        for op, n_value, x_first in _consumer_forms(v, x_value):
+            if new_values == 0:
+                y = pool.get(n_value)
+                if y is not None:
+                    yield [], op, (x, y) if x_first else (y, x)
+            elif n_value > 0 and n_value not in pool and n_value <= limit:
+                if new_values == 1:
+                    for made_op, p, q in index.get(n_value, ()):
+                        if usable(p, q):
+                            yield (
+                                [(n_value, made_op, p, q)],
+                                op,
+                                ((x, -1) if x_first else (-1, x)),
+                            )
+                    continue
+                for y_value, y in pool.items():
+                    for op2, c_value, y_first in _consumer_forms(n_value, y_value):
+                        if c_value <= 0 or c_value > limit or c_value in pool:
+                            continue
+                        if c_value == n_value:
+                            continue
+                        for made_op, p, q in index.get(c_value, ()):
+                            if usable(p, q):
+                                yield (
+                                    [
+                                        (c_value, made_op, p, q),
+                                        (
+                                            n_value,
+                                            op2,
+                                            *((y, -1) if y_first else (-1, y)),
+                                        ),
+                                    ],
+                                    op,
+                                    ((x, -2) if x_first else (-2, x)),
+                                )
+
+
+def _rederive_with_helpers(
     nodes: list[_Node],
     roots: set[int],
     live: set[int],
     limit: int,
     fits: Callable[[set[int]], bool],
+    new_values: int = 1,
 ) -> set[int] | None:
-    """One rewrite that nets a saving: a single-consumer helper u is dropped by rebuilding its
-    consumer w as x op n, where n is a new value made in one step from live values.
+    """One rewrite that nets a saving: rebuild a node w from other live values plus at most
+    `new_values` new ones, so that the chain of helpers private to w dies and outweighs them.
 
     Returns the new live set (nodes mutated), or None when no such rewrite exists.
     """
     index = _pair_index(nodes, live)
-    for u in sorted(live, reverse=True):
-        if nodes[u].op is None or u in roots:
+    consumers: dict[int, list[int]] = {n: [] for n in live}
+    for w in live:
+        if nodes[w].op:
+            for operand in {nodes[w].a, nodes[w].b}:
+                consumers[operand].append(w)
+    memo: dict[int, set[int]] = {}
+
+    def reaches(n: int) -> set[int]:
+        if n not in memo:
+            memo[n] = _reachable(nodes, {n})
+        return memo[n]
+
+    for w in sorted(live, reverse=True):
+        if nodes[w].op is None:
             continue
-        consumers = [w for w in live if nodes[w].op and u in (nodes[w].a, nodes[w].b)]
-        if len(consumers) != 1:
+        dead = _private_chain(nodes, roots, consumers, w)
+        if len(dead) <= new_values:
             continue
-        w = consumers[0]
-        v = nodes[w].value
-        pool = {nodes[n].value: n for n in live if n != u}
-        for x_value, x in pool.items():
-            for op, n_value, x_first in _consumer_forms(v, x_value):
-                if n_value <= 0 or n_value in pool or n_value > limit:
-                    continue
-                if n_value == nodes[u].value:
-                    continue
-                for made_op, p, q in index.get(n_value, ()):
-                    if u in (p, q) or w in (p, q) or x == w:
-                        continue
-                    if w in _reachable(nodes, {x, p, q}):
-                        continue
-                    saved = (nodes[w].op, nodes[w].a, nodes[w].b)
-                    nodes.append(_Node(n_value, made_op, p, q))
-                    n = len(nodes) - 1
-                    nodes[w].op = op
-                    nodes[w].a, nodes[w].b = (x, n) if x_first else (n, x)
-                    reach = _reachable(nodes, roots)
-                    if len(reach) < len(live) and fits(reach):
-                        return reach
-                    nodes.pop()
-                    nodes[w].op, nodes[w].a, nodes[w].b = saved
+        pool = {
+            nodes[n].value: n
+            for n in live
+            if n not in dead and n != w and w not in reaches(n)
+        }
+        for new, op, (a, b) in _rebuilds(
+            nodes, w, pool, index, dead, limit, new_values, reaches
+        ):
+            saved = (nodes[w].op, nodes[w].a, nodes[w].b)
+            base = len(nodes)
+
+            def real(ref: int, base: int = base) -> int:
+                return base - 1 - ref if ref < 0 else ref
+
+            for value, made_op, p, q in new:
+                nodes.append(_Node(value, made_op, real(p), real(q)))
+            nodes[w].op, nodes[w].a, nodes[w].b = op, real(a), real(b)
+            reach = _reachable(nodes, roots)
+            if len(reach) < len(live) and fits(reach):
+                return reach
+            del nodes[base:]
+            nodes[w].op, nodes[w].a, nodes[w].b = saved
     return None
 
 
@@ -297,12 +400,21 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
     live = _rederive(
         nodes, roots, _reachable(nodes, roots), lambda keep: allocate(keep) is not None
     )
-    while (
-        more := _rederive_with_helper(
-            nodes, roots, live, puzzle.value_limit, lambda k: allocate(k) is not None
-        )
-    ) is not None:
-        live = _rederive(nodes, roots, more, lambda keep: allocate(keep) is not None)
+
+    def fits(keep: set[int]) -> bool:
+        return allocate(keep) is not None
+
+    while True:
+        more = None
+        for new_values in (0, 1, 2):
+            more = _rederive_with_helpers(
+                nodes, roots, live, puzzle.value_limit, fits, new_values
+            )
+            if more is not None:
+                break
+        if more is None:
+            break
+        live = _rederive(nodes, roots, more, fits)
     candidate = allocate(live)
     if candidate is None or len(candidate) >= len(program):
         return program

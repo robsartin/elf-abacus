@@ -90,3 +90,22 @@ def test_shouldReplaceHelperChainWithOneNewHelperWhenConsumerHasNoDirectAlternat
     program = [["*", 1, 0, 3], ["+", 3, 3, 4], ["*", 1, 1, 5], ["*", 3, 4, 6]]
     out = optimize(puzzle, program)
     assert verify(puzzle, out) == 3
+
+
+def test_shouldReplaceAPrivateChainWithTwoNewHelpersWhenThatNetsASaving():
+    # Found by random search: the one-new-helper pass stops at 5 instructions; rebuilding 106 as
+    # x op (c op y) with two new values drops its three-step private chain and reaches 4.
+    puzzle = Puzzle("p", [2, 6, 4], [8, 106], 10**6)
+    program = [
+        ["+", 0, 0, 3],
+        ["*", 2, 1, 4],
+        ["*", 1, 2, 5],
+        ["+", 1, 0, 6],
+        ["*", 3, 4, 7],
+        ["+", 1, 7, 8],
+        ["+", 2, 8, 9],
+    ]
+    verify(puzzle, program)
+    out = optimize(puzzle, program)
+    verify(puzzle, out)
+    assert len(out) == 4
