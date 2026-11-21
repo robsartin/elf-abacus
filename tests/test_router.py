@@ -19,7 +19,7 @@ def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     assert plan.horner
     assert plan.chains == (
         ChainRun(
-            pool_size=16, pairs=True, seed=0, grow=True, relate=True, keep_inner=True
+            pool_size=10, pairs=True, seed=0, grow=True, relate=True, keep_inner=True
         ),
     )
 
@@ -27,16 +27,21 @@ def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
 def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(16, True)}
+    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(10, True)}
 
 
-def test_shouldKeepFullChainPortfolioWhenFewTargets():
+def test_shouldRunGrowRelateKeepInnerSmallPoolsWhenFewTargets():
     plan = route(SMALL, seeds=3)
     assert plan.horner
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {
-        (n, p) for n in (24, 32, 40) for p in (True, False)
-    }
-    assert all(c.seed == 0 for c in plan.chains)
+    grown = [c for c in plan.chains if c.grow]
+    assert {c.pool_size for c in grown} == {6, 8, 10}
+    assert {c.seed for c in grown} == {0, 1}
+    assert all(c.pairs and c.relate and c.keep_inner for c in grown)
+
+
+def test_shouldKeepACheapNoGrowFallbackWhenFewTargets():
+    plan = route(SMALL, seeds=3)
+    assert ChainRun(pool_size=24, pairs=True, seed=0) in plan.chains
 
 
 def test_shouldSolveSmallPuzzleThroughRouterWhenRunning():
