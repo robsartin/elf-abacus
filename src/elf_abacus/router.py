@@ -9,8 +9,12 @@ from elf_abacus.verifier import Puzzle
 # From the per-variant win table in ADR 0010: with this many targets the largest pool with pair
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
-BIG_POOL = 16
-SMALL_POOLS = (24, 32, 40)
+BIG_POOL = 10  # ADR 0014: smaller pools beat 16 once grow + relate + keep_inner are on
+SMALL_GROW_POOLS = (6, 8, 10)
+SMALL_GROW_SEEDS = (0, 1)
+SMALL_FALLBACK_POOL = (
+    24  # no-grow run kept as insurance; the grown runs may fail outright
+)
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ def features(puzzle: Puzzle) -> Features:
 
 
 def route(puzzle: Puzzle, seeds: int = 3) -> Route:
-    """Big puzzles get `seeds` runs of the strongest chain; small ones the cheap full portfolio."""
+    """Big puzzles get `seeds` runs of the strongest chain; small ones a few small grown pools."""
     if features(puzzle).targets >= BIG_TARGETS:
         return Route(
             True,
@@ -68,7 +72,9 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
                 for seed in range(seeds)
             ),
         )
-    return Route(
-        True,
-        tuple(ChainRun(n, pairs, 0) for pairs in (True, False) for n in SMALL_POOLS),
+    grown = tuple(
+        ChainRun(n, True, seed, grow=True, relate=True, keep_inner=True)
+        for seed in SMALL_GROW_SEEDS
+        for n in SMALL_GROW_POOLS
     )
+    return Route(True, (ChainRun(SMALL_FALLBACK_POOL, True, 0), *grown))

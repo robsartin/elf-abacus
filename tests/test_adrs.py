@@ -29,6 +29,7 @@ REQUIRED_SLUGS = {
     "0012": "verified-peephole-post-pass",
     "0013": "intermediate-pool-members-and-target-order",
     "0014": "lookahead-retention-of-full-registers",
+    "0015": "retune-router-pools-for-grown-chains",
 }
 
 
