@@ -367,3 +367,53 @@ def test_shouldPlanTheProductPairWhenItIsTheCheapestWay():
     program = plan.program(pool_regs=[0, 1, 2, 3], accs=[4, 5])
     puzzle = Puzzle("p", PAIR_POOL, [PRODUCT_TARGET], 10**12, registers=8)
     assert verify(puzzle, program) == plan.cost
+
+
+def _run(ops, regs):
+    regs = dict(regs)
+    for op, i, j, d in ops:
+        a, b = regs[i], regs[j]
+        regs[d] = {"+": a + b, "*": a * b, "-": a - b, "/": a // b if b else 0}[op]
+    return regs
+
+
+@pytest.mark.parametrize("room", [1, 2])
+def test_shouldRedirectNewIntermediateToFreeRegisterWhenAccumulatorValueIsNew(room):
+    from elf_abacus.solvers.chain import save_intermediates
+
+    ops = [["+", 0, 1, 9], ["*", 9, 0, 9], ["-", 9, 1, 9]]
+    start = {0: 3, 1: 4}
+    out, saved = save_intermediates(ops, start, set(), 10**9, 5, 5 + room)
+    assert saved[0] == (7, 5)
+    assert len(saved) == room  # the last op is the target and is never redirected
+    assert out[0][3] == 5 and out[1][1] == 5  # the next op reads the saved copy
+    assert _run(out, start)[9] == _run(ops, start)[9]
+    assert all(_run(out, start)[r] == v for v, r in saved)
+
+
+def test_shouldKeepNothingWhenNoRegisterIsFree():
+    from elf_abacus.solvers.chain import save_intermediates
+
+    ops = [["+", 0, 1, 9], ["*", 9, 0, 9]]
+    out, saved = save_intermediates(ops, {0: 3, 1: 4}, set(), 10**9, 5, 5)
+    assert out == ops and saved == []
+
+
+def test_shouldSkipValuesAlreadyCoveredOrRepeatedOrOutOfRange():
+    from elf_abacus.solvers.chain import save_intermediates
+
+    ops = [["+", 0, 1, 9], ["-", 9, 0, 9], ["+", 9, 0, 9], ["+", 9, 1, 9]]
+    start = {0: 3, 1: 4}  # values 7, 4, 7 (repeat), 11 (last)
+    _, saved = save_intermediates(ops, start, {4}, 10**9, 5, 8)
+    assert [v for v, _ in saved] == [7]
+    _, saved = save_intermediates(ops, start, set(), 6, 5, 8)
+    assert [v for v, _ in saved] == [4]  # 7 exceeds the limit
+
+
+def test_shouldProduceVerifiedProgramWhenKeepingIntermediates():
+    from elf_abacus.solvers.chain import solve
+
+    puzzle = Puzzle("p", [7, 19, 40], [48611, 902113, 55_000_001, 77_123_456], 10**9)
+    program = solve(puzzle, pool_size=8, seed=1, grow=True, keep_inner=True)
+    assert program is not None
+    assert verify(puzzle, program) == len(program)
