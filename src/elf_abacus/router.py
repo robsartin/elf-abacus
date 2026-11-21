@@ -9,7 +9,7 @@ from elf_abacus.verifier import Puzzle
 # From the per-variant win table in ADR 0010: with this many targets the largest pool with pair
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
-BIG_POOL = 10  # ADR 0014: smaller pools beat 16 once grow + relate + keep_inner are on
+BIG_POOL = 10  # ADR 0015: smaller pools beat 16 once grow + relate + keep_inner are on
 SMALL_GROW_POOLS = (6, 8, 10)
 SMALL_GROW_SEEDS = (0, 1)
 SMALL_FALLBACK_POOL = (
