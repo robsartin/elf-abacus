@@ -12,6 +12,10 @@ BIG_TARGETS = 15
 BIG_POOL = 10  # ADR 0015: smaller pools beat 16 once grow + relate + keep_inner are on
 SMALL_GROW_POOLS = (6, 8, 10)
 SMALL_GROW_SEEDS = (0, 1)
+# Few starting values and a value limit just above the top target leave pool 10 too small to
+# reach the first target at all; the whole puzzle then falls to Horner (~460 instructions against
+# ~380 for these larger pools). Tried only after every primary run fails.
+BIG_FALLBACK_POOLS = (16, 24)
 SMALL_FALLBACK_POOL = (
     24  # no-grow run kept as insurance; the grown runs may fail outright
 )
@@ -41,6 +45,9 @@ class ChainRun:
 class Route:
     horner: bool
     chains: tuple[ChainRun, ...]
+    fallback: tuple[
+        ChainRun, ...
+    ] = ()  # tried in order only if `chains` all find nothing
 
 
 def features(puzzle: Puzzle) -> Features:
@@ -70,6 +77,12 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
                     retain=True,
                 )
                 for seed in range(seeds)
+            ),
+            fallback=tuple(
+                ChainRun(
+                    n, True, 0, grow=True, relate=True, keep_inner=True, retain=True
+                )
+                for n in BIG_FALLBACK_POOLS
             ),
         )
     grown = tuple(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from elf_abacus.router import route
+from elf_abacus.router import ChainRun, route
 from elf_abacus.solvers import chain, horner
 from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 
@@ -20,23 +20,28 @@ def _shortest(puzzle: Puzzle, programs: list[list[list] | None]) -> list[list] |
     return best
 
 
+def _run_chain(puzzle: Puzzle, c: ChainRun) -> list[list] | None:
+    return chain.solve(
+        puzzle,
+        pool_size=c.pool_size,
+        pairs=c.pairs,
+        seed=c.seed,
+        grow=c.grow,
+        relate=c.relate,
+        keep_inner=c.keep_inner,
+        retain=c.retain,
+    )
+
+
 def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:
     """Each routed solver's best program for one puzzle (module-level so it can run in a worker)."""
     plan = route(puzzle, seeds)
-    chain_programs = [
-        chain.solve(
-            puzzle,
-            pool_size=c.pool_size,
-            pairs=c.pairs,
-            seed=c.seed,
-            grow=c.grow,
-            relate=c.relate,
-            keep_inner=c.keep_inner,
-            retain=c.retain,
-        )
-        for c in plan.chains
-    ]
+    best = _shortest(puzzle, [_run_chain(puzzle, c) for c in plan.chains])
+    for c in plan.fallback:
+        if best is not None:
+            break
+        best = _shortest(puzzle, [_run_chain(puzzle, c)])
     return {
         "horner": horner.solve(puzzle) if plan.horner else None,
-        "chain": _shortest(puzzle, chain_programs),
+        "chain": best,
     }
