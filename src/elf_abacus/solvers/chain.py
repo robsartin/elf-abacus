@@ -713,6 +713,61 @@ def make_pool(
     return pool, [regs[v] for v in pool], program
 
 
+def save_intermediates(
+    ops: list[list],
+    regs: dict[int, int],
+    covered: set[int],
+    limit: int,
+    first_free: int,
+    top: int,
+) -> tuple[list[list], list[tuple[int, int]]]:
+    """Redirect each new in-range value a plan computes before its last op to its own register.
+
+    `regs` maps registers to the values they hold before `ops` run. Registers `first_free..top-1`
+    are free; the last op (the target) is never redirected. Later ops read the saved copy instead
+    of the accumulator until the accumulator is written again. Returns the rewritten ops and the
+    (value, register) pairs now holding the saved values.
+    """
+    state = dict(regs)
+    values: list[int] = []
+    for op, i, j, d in ops:
+        a, b = state[i], state[j]
+        state[d] = (
+            a + b
+            if op == "+"
+            else a * b
+            if op == "*"
+            else a - b
+            if op == "-"
+            else a // b
+            if b
+            else 0
+        )
+        values.append(state[d])
+    out: list[list] = []
+    saved: list[tuple[int, int]] = []
+    alias: dict[int, int] = {}
+    seen = set(covered)
+    for k, (op, i, j, d) in enumerate(ops):
+        i, j = alias.get(i, i), alias.get(j, j)
+        value = values[k]
+        if (
+            k < len(ops) - 1
+            and first_free + len(saved) < top
+            and 1 <= value <= limit
+            and value not in seen
+        ):
+            reg = first_free + len(saved)
+            alias[d] = reg
+            saved.append((value, reg))
+            seen.add(value)
+            out.append([op, i, j, reg])
+        else:
+            alias.pop(d, None)
+            out.append([op, i, j, d])
+    return out, saved
+
+
 def solve(
     puzzle: Puzzle,
     pool_size: int = 40,
@@ -725,12 +780,15 @@ def solve(
     grow: bool = False,
     rebuild_every: int = 4,
     relate: bool = False,
+    keep_inner: bool = False,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none.
 
     With `grow`, every solved target is kept in its own register and joins the pool as a free
     term for later targets, once `rebuild_every` of them are waiting; the search sets are then
     rebuilt. The accumulators sit at the top of the register file so the pool can grow below them.
+    With `keep_inner` (needs `grow`), the new values a plan computes on the way also keep a
+    register each while any are free.
 
     With `relate`, a target that sits near an earlier one may instead be built as that earlier
     target plus or minus a small gap (see `relations`). The registers left free above the
@@ -798,6 +856,17 @@ def solve(
             bases[target] = pool_regs[-1]
             next_reg += 1
             waiting += 1
+            if keep_inner:
+                room_top = min(accs[0], next_reg + 63 - len(pool))
+                ops, saved = save_intermediates(
+                    ops, dict(zip(pool_regs, pool)), covered, limit, next_reg, room_top
+                )
+                for value, reg in saved:
+                    pool.append(value)
+                    pool_regs.append(reg)
+                    covered.add(value)
+                next_reg += len(saved)
+                waiting += len(saved)
         program += ops
         if waiting >= rebuild_every:
             forward = build_forward(pool, limit, depth=depth, max_rows=100_000)

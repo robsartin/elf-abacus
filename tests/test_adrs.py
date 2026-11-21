@@ -27,6 +27,7 @@ REQUIRED_SLUGS = {
     "0010": "per-family-routing-and-seed-budget",
     "0011": "target-relations-delta-plans",
     "0012": "verified-peephole-post-pass",
+    "0013": "intermediate-pool-members-and-target-order",
 }
 
 
