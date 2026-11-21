@@ -44,3 +44,10 @@ threshold and pool sizes are in code; this ADR records why, not the values.
 
 ## Amendment 2026-11-20 (integration)
 This corrects the Decision: for many-target puzzles the route's chain runs use pool growth (`grow=True`), so they are no longer plain pool-40 pair chains. The sample numbers above predate growth and are not the whole-set effect. PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap.
+
+
+## Correction 2026-11-21
+The amendment above states that PR 9 wired pool growth into `run.solve_one`. That was wrong: the edit
+that was meant to do it matched nothing, so `run.solve_one` passed neither, and the whole-set run of
+218,259 (218,127 best-of, Kaggle-confirmed) used neither pool growth nor the lazy probe. Its gain came from
+the routing, the product pairs and the native kernel. The route for many-target puzzles is now pool 36 with growth and relate (ADR 0011), chosen because pool 36 with growth and relate beat pool 40 with growth by 2.4-2.8% on the sample; the code is the authority for the pool size.

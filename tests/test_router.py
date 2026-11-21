@@ -17,13 +17,15 @@ def test_shouldReportPuzzleFeaturesWhenGivenAPuzzle():
 def test_shouldRouteBigPuzzleToLargestPoolChainOnlyWhenManyTargets():
     plan = route(BIG, seeds=1)
     assert plan.horner
-    assert plan.chains == (ChainRun(pool_size=40, pairs=True, seed=0, grow=True),)
+    assert plan.chains == (
+        ChainRun(pool_size=36, pairs=True, seed=0, grow=True, relate=True),
+    )
 
 
 def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
-    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(40, True)}
+    assert {(c.pool_size, c.pairs) for c in plan.chains} == {(36, True)}
 
 
 def test_shouldKeepFullChainPortfolioWhenFewTargets():

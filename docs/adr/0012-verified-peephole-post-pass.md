@@ -1,4 +1,4 @@
-# 0011. Shrink finished programs with a verified peephole post-pass
+# 0012. Shrink finished programs with a verified peephole post-pass
 
 Status: Accepted (2026-11-20)
 
