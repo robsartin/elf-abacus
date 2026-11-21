@@ -64,7 +64,46 @@ def test_shouldRunOneChainPerSeedWhenSolvingBigPuzzle(monkeypatch):
     )
     monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
     run.solve_one(BIG, seeds=2)
-    assert seen == [0, 1]
+    assert seen[:2] == [0, 1]
+
+
+def test_shouldRouteLargerGrownPoolsAsFallbackWhenPuzzleIsBig():
+    plan = route(BIG, seeds=1)
+    assert [c.pool_size for c in plan.fallback] == [16, 24]
+    assert all(c.grow and c.relate and c.keep_inner and c.retain for c in plan.fallback)
+
+
+def test_shouldHaveNoFallbackWhenFewTargets():
+    assert route(SMALL, seeds=1).fallback == ()
+
+
+def test_shouldRunFallbackOnlyWhenPrimaryChainsFindNothing(monkeypatch):
+    pools = []
+
+    def fake_solve(puzzle, **kw):
+        pools.append(kw["pool_size"])
+        return [["+", 0, 1, 2]] if kw["pool_size"] == 16 else None
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
+    monkeypatch.setattr(run, "verify", lambda puzzle, program: None)
+    results = run.solve_one(BIG, seeds=2)
+    assert pools == [10, 10, 16]
+    assert results["chain"] == [["+", 0, 1, 2]]
+
+
+def test_shouldSkipFallbackWhenPrimaryChainSucceeds(monkeypatch):
+    pools = []
+
+    def fake_solve(puzzle, **kw):
+        pools.append(kw["pool_size"])
+        return [["+", 0, 1, 2]]
+
+    monkeypatch.setattr(run.chain, "solve", fake_solve)
+    monkeypatch.setattr(run.horner, "solve", lambda puzzle: None)
+    monkeypatch.setattr(run, "verify", lambda puzzle, program: None)
+    run.solve_one(BIG, seeds=1)
+    assert pools == [10]
 
 
 def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monkeypatch):
