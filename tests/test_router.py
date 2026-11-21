@@ -136,3 +136,23 @@ def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monke
             "retain": False,
         }
     ]
+
+
+HUGE = Puzzle("huge", [4, 22], [2**55 + k for k in range(32)], 2**60)
+
+
+@pytest.mark.parametrize("seeds", [1, 3])
+def test_shouldRouteTwoPoolTwentySeedsWhenEveryTargetIsAtLeast2To54(seeds):
+    plan = route(HUGE, seeds=seeds)
+    assert plan.horner
+    assert [(c.pool_size, c.seed) for c in plan.chains] == [(20, 0), (20, 1)]
+    assert all(
+        c.pairs and c.grow and c.relate and c.keep_inner and c.retain
+        for c in plan.chains
+    )
+    assert [c.pool_size for c in plan.fallback] == [16, 24]
+
+
+def test_shouldKeepPoolTenRouteWhenSmallestTargetIsBelow2To54():
+    top = Puzzle("p", [4, 22], [2**54 - 1, *range(2**55, 2**55 + 31)], 2**60)
+    assert [c.pool_size for c in route(top, seeds=1).chains] == [10]

@@ -10,6 +10,11 @@ from elf_abacus.verifier import Puzzle
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
 BIG_POOL = 10  # ADR 0015: smaller pools beat 16 once grow + relate + keep_inner are on
+# Random 60-bit targets with few starting values (ADR 0010 round five): pool 20 with two seeds beat
+# pool 10 / the 16-24 fallback by ~5% on the six-puzzle sweep, at ~3 minutes per run.
+HUGE_TARGET_BITS = 54
+HUGE_POOL = 20
+HUGE_SEEDS = (0, 1)
 SMALL_GROW_POOLS = (6, 8, 10)
 SMALL_GROW_SEEDS = (0, 1)
 # Few starting values and a value limit just above the top target leave pool 10 too small to
@@ -64,11 +69,14 @@ def features(puzzle: Puzzle) -> Features:
 def route(puzzle: Puzzle, seeds: int = 3) -> Route:
     """Big puzzles get `seeds` runs of the strongest chain; small ones a few small grown pools."""
     if features(puzzle).targets >= BIG_TARGETS:
+        pool, run_seeds = BIG_POOL, tuple(range(seeds))
+        if min(puzzle.targets) >= 2**HUGE_TARGET_BITS:
+            pool, run_seeds = HUGE_POOL, HUGE_SEEDS
         return Route(
             True,
             tuple(
                 ChainRun(
-                    BIG_POOL,
+                    pool,
                     True,
                     seed,
                     grow=True,
@@ -76,7 +84,7 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
                     keep_inner=True,
                     retain=True,
                 )
-                for seed in range(seeds)
+                for seed in run_seeds
             ),
             fallback=tuple(
                 ChainRun(
