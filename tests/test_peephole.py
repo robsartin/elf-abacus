@@ -81,3 +81,12 @@ def test_shouldKeepHelperWhenRemovingItWouldNotFitInRegisters():
     live = peephole._reachable(nodes, roots)
     kept = peephole._rederive(nodes, roots, live, fits=lambda _live: False)
     assert kept == live
+
+
+def test_shouldReplaceHelperChainWithOneNewHelperWhenConsumerHasNoDirectAlternative():
+    # 6 and 12 only feed 72; 72 = 9 * 8 is not reachable from live values in one step,
+    # but one new helper (a cheaper value) lets both helpers go.
+    puzzle = Puzzle("p", [2, 3, 2], [9, 72], 10**9, registers=16)
+    program = [["*", 1, 0, 3], ["+", 3, 3, 4], ["*", 1, 1, 5], ["*", 3, 4, 6]]
+    out = optimize(puzzle, program)
+    assert verify(puzzle, out) == 3

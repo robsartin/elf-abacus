@@ -112,6 +112,88 @@ def _rederive(
     return live
 
 
+def _pair_index(
+    nodes: list[_Node], live: set[int]
+) -> dict[int, list[tuple[str, int, int]]]:
+    """Value -> a few (op, a, b) over live nodes making it in one step, for values not live."""
+    index: dict[int, list[tuple[str, int, int]]] = {}
+    items = [(nodes[n].value, n) for n in live]
+    present = {value for value, _ in items}
+    for av, a in items:
+        for bv, b in items:
+            made = [("+", av + bv), ("*", av * bv)]
+            if av > bv:
+                made.append(("-", av - bv))
+            if bv and av % bv == 0:
+                made.append(("/", av // bv))
+            for op, value in made:
+                if value not in present:
+                    slot = index.setdefault(value, [])
+                    if len(slot) < 3:
+                        slot.append((op, a, b))
+    return index
+
+
+def _consumer_forms(v: int, x: int) -> Iterator[tuple[str, int, bool]]:
+    """Ways v = x op n (n first operand when the flag is False): (op, n value, x first)."""
+    if v > x:
+        yield "+", v - x, True
+        yield "-", v + x, False
+    if x > v:
+        yield "-", x - v, True
+    if x and v % x == 0:
+        yield "*", v // x, True
+    if x % v == 0:
+        yield "/", x // v, True
+    yield "/", v * x, False
+
+
+def _rederive_with_helper(
+    nodes: list[_Node],
+    roots: set[int],
+    live: set[int],
+    limit: int,
+    fits: Callable[[set[int]], bool],
+) -> set[int] | None:
+    """One rewrite that nets a saving: a single-consumer helper u is dropped by rebuilding its
+    consumer w as x op n, where n is a new value made in one step from live values.
+
+    Returns the new live set (nodes mutated), or None when no such rewrite exists.
+    """
+    index = _pair_index(nodes, live)
+    for u in sorted(live, reverse=True):
+        if nodes[u].op is None or u in roots:
+            continue
+        consumers = [w for w in live if nodes[w].op and u in (nodes[w].a, nodes[w].b)]
+        if len(consumers) != 1:
+            continue
+        w = consumers[0]
+        v = nodes[w].value
+        pool = {nodes[n].value: n for n in live if n != u}
+        for x_value, x in pool.items():
+            for op, n_value, x_first in _consumer_forms(v, x_value):
+                if n_value <= 0 or n_value in pool or n_value > limit:
+                    continue
+                if n_value == nodes[u].value:
+                    continue
+                for made_op, p, q in index.get(n_value, ()):
+                    if u in (p, q) or w in (p, q) or x == w:
+                        continue
+                    if w in _reachable(nodes, {x, p, q}):
+                        continue
+                    saved = (nodes[w].op, nodes[w].a, nodes[w].b)
+                    nodes.append(_Node(n_value, made_op, p, q))
+                    n = len(nodes) - 1
+                    nodes[w].op = op
+                    nodes[w].a, nodes[w].b = (x, n) if x_first else (n, x)
+                    reach = _reachable(nodes, roots)
+                    if len(reach) < len(live) and fits(reach):
+                        return reach
+                    nodes.pop()
+                    nodes[w].op, nodes[w].a, nodes[w].b = saved
+    return None
+
+
 def _depth_first_order(nodes: list[_Node], keep: set[int]) -> list[int]:
     """Operands-first order that finishes each subtree before starting the next (low pressure)."""
     order: list[int] = []
@@ -215,6 +297,12 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
     live = _rederive(
         nodes, roots, _reachable(nodes, roots), lambda keep: allocate(keep) is not None
     )
+    while (
+        more := _rederive_with_helper(
+            nodes, roots, live, puzzle.value_limit, lambda k: allocate(k) is not None
+        )
+    ) is not None:
+        live = _rederive(nodes, roots, more, lambda keep: allocate(keep) is not None)
     candidate = allocate(live)
     if candidate is None or len(candidate) >= len(program):
         return program
