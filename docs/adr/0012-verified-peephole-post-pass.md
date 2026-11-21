@@ -38,3 +38,13 @@ Cheap enough to run on every submission. Pool constants used once, accumulator s
 target register and register copies need no rewrite of their own: there are no copies (every
 instruction is an operation) and the target register is irrelevant, so those cases reduce to
 the three rewrites above. Gains shrink as solvers improve and stop emitting waste.
+
+## Amendment 2026-11-21: pair-helper rewrite
+
+The original post-pass was already at a fixpoint on the trial4 output (13 instructions saved over
+6 programs). A fourth rewrite, `_rederive_with_helper` in `src/elf_abacus/peephole.py`, rebuilds a
+single-consumer helper's consumer as `x op n` where `n` is one new value made from two live values.
+It is accepted only when the live set shrinks, the programs still fit in the registers and the
+verifier passes. On the whole-set output it saved 1,843 of 196,977 instructions (0.94%); the full
+pass costs about 2.6 s per program. Not tried: multi-consumer helpers and chains replaced by two or
+more new helpers.

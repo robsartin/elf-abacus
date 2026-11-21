@@ -46,3 +46,15 @@ The sample is small (12 and 36 puzzles) and seed noise is 0.5-1%, so the whole-s
 estimate; a full run is the check. Not tried: per-feature pool choice (targets, starts, limit bits)
 beyond the two-way split, since on the 12-puzzle win table the winners were scattered across pools 8 to 16 with no visible link to
 target count, starting values or limit bits; 12 puzzles cannot rule a feature out.
+
+## Amendment 2026-11-21: grown fallback for failing big puzzles
+
+On five 32-target puzzles with a value limit within about 5% of the top target, the pool-10 run
+fails at the first target and the puzzle fell back to Horner at about 560 instructions. `Route.fallback`
+(`src/elf_abacus/router.py`) now runs grown pool 16 then pool 24 only while no verified chain program
+exists, and `run.solve_one` honours it. Measured at about 400 instructions on three of the five,
+at 3 to 7 minutes of CPU per affected puzzle. The larger excess is the roughly 124 puzzles with limit
+ratio near 1.0 that do succeed but average about 370 instructions; that is untouched.
+Negative results from the same round, not adopted: pool 8 is no better than 10, pools 6 and 4 fail on
+the hardest many-target puzzles, rebuild cadence 2 gains 0.4%, evicting pool constants costs 3.4%,
+and distance-weighted retention scoring is identical to the baseline.
