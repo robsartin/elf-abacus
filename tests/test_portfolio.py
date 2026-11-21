@@ -1,7 +1,7 @@
 import pytest
 
 from elf_abacus.portfolio import best_programs
-from elf_abacus.verifier import InvalidProgram, Puzzle
+from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 
 PUZZLE = Puzzle("p1", [3], [1, 2, 5, 8], 9)
 LONG = [["/", 0, 0, 1], ["-", 0, 1, 2], ["+", 0, 2, 3], ["+", 0, 3, 4], ["+", 0, 0, 5]]
@@ -14,13 +14,22 @@ def test_shouldKeepShortestWhenSeveralSolversAreValid():
 
 
 def test_shouldSkipCandidateWhenItIsInvalid():
-    assert best_programs([PUZZLE], [{"p1": BROKEN}, {"p1": LONG}]) == {"p1": LONG}
+    result = best_programs([PUZZLE], [{"p1": BROKEN}, {"p1": LONG}])
+    assert verify(PUZZLE, result["p1"]) <= len(LONG)
 
 
 def test_shouldSkipSolverWhenItHasNoProgramForPuzzle():
-    assert best_programs([PUZZLE], [{}, {"p1": LONG}]) == {"p1": LONG}
+    result = best_programs([PUZZLE], [{}, {"p1": LONG}])
+    assert verify(PUZZLE, result["p1"]) <= len(LONG)
 
 
 def test_shouldRaiseWhenNoCandidateIsValid():
     with pytest.raises(InvalidProgram, match="p1"):
         best_programs([PUZZLE], [{"p1": BROKEN}])
+
+
+def test_shouldOptimizeWinnerWhenItHasRemovableInstructions():
+    padded = [["*", 0, 0, 9], *SHORT]
+    result = best_programs([PUZZLE], [{"p1": padded}])
+    assert len(result["p1"]) == len(SHORT)
+    verify(PUZZLE, result["p1"])
