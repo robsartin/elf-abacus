@@ -25,6 +25,11 @@ REQUIRED_SLUGS = {
     "0008": "dynamic-pool-growth",
     "0009": "product-pair-search",
     "0010": "per-family-routing-and-seed-budget",
+    "0011": "target-relations-delta-plans",
+    "0012": "verified-peephole-post-pass",
+    "0013": "intermediate-pool-members-and-target-order",
+    "0014": "lookahead-retention-of-full-registers",
+    "0015": "retune-router-pools-for-grown-chains",
 }
 
 

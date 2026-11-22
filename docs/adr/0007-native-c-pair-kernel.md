@@ -70,3 +70,10 @@ authority for constants (`LAZY_BUDGET`, `PAIR_TERMS`, the flags in `pairkernel.p
 
 ## Amendment 2026-11-20 (integration)
 PR 9 merged this with ADRs 0007-0010 together. The whole-set score of the combined solver was 218,259 (218,127 as best-of with the earlier file, Kaggle-confirmed) against 222,529 before: -2.0%, well under the sum of the sample gains, so the four overlap. `run.solve_one` now passes `lazy=True` for every chain run (it falls back to NumPy when the native kernel is unavailable). That whole-set run enabled lazy together with the other three, so the lazy probe's own contribution was not isolated; the sentence above about adding it only after a whole-set run that shows it pays was not met in isolation.
+
+
+## Correction 2026-11-21
+The amendment above states that PR 9 wired pool growth and the lazy probe into `run.solve_one`. That was wrong: the edit
+that was meant to do it matched nothing, so `run.solve_one` passed neither, and the whole-set run of
+218,259 (218,127 best-of, Kaggle-confirmed) used neither pool growth nor the lazy probe. Its gain came from
+the routing, the product pairs and the native kernel. The lazy probe was later measured alone on the sample (many-target puzzles, growth on, four seeds) and was not worth keeping on; it stays off.

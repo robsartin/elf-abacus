@@ -713,6 +713,61 @@ def make_pool(
     return pool, [regs[v] for v in pool], program
 
 
+def save_intermediates(
+    ops: list[list],
+    regs: dict[int, int],
+    covered: set[int],
+    limit: int,
+    first_free: int,
+    top: int,
+) -> tuple[list[list], list[tuple[int, int]]]:
+    """Redirect each new in-range value a plan computes before its last op to its own register.
+
+    `regs` maps registers to the values they hold before `ops` run. Registers `first_free..top-1`
+    are free; the last op (the target) is never redirected. Later ops read the saved copy instead
+    of the accumulator until the accumulator is written again. Returns the rewritten ops and the
+    (value, register) pairs now holding the saved values.
+    """
+    state = dict(regs)
+    values: list[int] = []
+    for op, i, j, d in ops:
+        a, b = state[i], state[j]
+        state[d] = (
+            a + b
+            if op == "+"
+            else a * b
+            if op == "*"
+            else a - b
+            if op == "-"
+            else a // b
+            if b
+            else 0
+        )
+        values.append(state[d])
+    out: list[list] = []
+    saved: list[tuple[int, int]] = []
+    alias: dict[int, int] = {}
+    seen = set(covered)
+    for k, (op, i, j, d) in enumerate(ops):
+        i, j = alias.get(i, i), alias.get(j, j)
+        value = values[k]
+        if (
+            k < len(ops) - 1
+            and first_free + len(saved) < top
+            and 1 <= value <= limit
+            and value not in seen
+        ):
+            reg = first_free + len(saved)
+            alias[d] = reg
+            saved.append((value, reg))
+            seen.add(value)
+            out.append([op, i, j, reg])
+        else:
+            alias.pop(d, None)
+            out.append([op, i, j, d])
+    return out, saved
+
+
 def solve(
     puzzle: Puzzle,
     pool_size: int = 40,
@@ -724,13 +779,26 @@ def solve(
     lazy: bool = False,
     grow: bool = False,
     rebuild_every: int = 4,
+    relate: bool = False,
+    keep_inner: bool = False,
+    retain: bool = False,
 ) -> list[list] | None:
     """Chain solver: a pool of constants, then one plan per target; None if a target has none.
 
     With `grow`, every solved target is kept in its own register and joins the pool as a free
     term for later targets, once `rebuild_every` of them are waiting; the search sets are then
     rebuilt. The accumulators sit at the top of the register file so the pool can grow below them.
+    With `keep_inner` (needs `grow`), the new values a plan computes on the way also keep a
+    register each while any are free. With `retain` (needs `grow`), once every register is taken a
+    new target overwrites the pool value that the remaining targets are least near, if it is
+    nearer to more of them (see `relations.pick_victim`).
+
+    With `relate`, a target that sits near an earlier one may instead be built as that earlier
+    target plus or minus a small gap (see `relations`). The registers left free above the
+    accumulators keep the targets that later ones are close to, oldest overwritten first.
     """
+    from elf_abacus.solvers.relations import pick_victim, plan_delta, wanted_as_base
+
     if len(puzzle.starting_values) + nesting + 1 > puzzle.registers:
         return None
     pool, pool_regs, program = make_pool(
@@ -750,7 +818,10 @@ def solve(
     covered = set(pool)
     next_reg = len(puzzle.starting_values) + len(program)
     waiting = 0
-    for target in puzzle.targets:
+    bases: dict[int, int] = {}  # solved target value -> register still holding it
+    keep = list(range(accs[-1] + 1, puzzle.registers)) if relate else []
+    kept: list[int] = []  # values in `keep` registers, oldest first
+    for index, target in enumerate(puzzle.targets):
         if target in covered:
             continue
         plan = plan_target(
@@ -766,13 +837,49 @@ def solve(
         if plan is None:
             return None
         ops = plan.program(pool_regs, accs)
+        if relate and bases:
+            delta = plan_delta(
+                target, bases, pool, limit, forward, sums, plan.cost, nesting
+            )
+            if delta is not None:
+                ops = delta.program(pool_regs, accs, accs[0])
+        if keep and wanted_as_base(puzzle.targets, index):
+            slot = keep[len(kept) % len(keep)] if len(kept) < len(keep) else None
+            if slot is None:
+                old = kept.pop(0)
+                slot = bases.pop(old)
+            kept.append(target)
+            bases[target] = slot
+            ops[-1][3] = slot
         covered.add(target)
         if grow and next_reg < accs[0] and len(pool) < 63:
             ops[-1][3] = next_reg  # the plan's last instruction writes the target
             pool.append(target)
             pool_regs.append(next_reg)
+            bases[target] = pool_regs[-1]
             next_reg += 1
             waiting += 1
+            if keep_inner:
+                room_top = min(accs[0], next_reg + 63 - len(pool))
+                ops, saved = save_intermediates(
+                    ops, dict(zip(pool_regs, pool)), covered, limit, next_reg, room_top
+                )
+                for value, reg in saved:
+                    pool.append(value)
+                    pool_regs.append(reg)
+                    covered.add(value)
+                next_reg += len(saved)
+                waiting += len(saved)
+        elif grow and retain:
+            remaining = [u for u in puzzle.targets[index + 1 :] if u not in covered]
+            victim = pick_victim(pool, len(puzzle.starting_values), remaining, target)
+            if victim is not None:
+                reg = pool_regs[victim]
+                ops[-1][3] = reg
+                bases.pop(pool[victim], None)
+                pool[victim] = target
+                bases[target] = reg
+                waiting = rebuild_every  # the search sets name the evicted value
         program += ops
         if waiting >= rebuild_every:
             forward = build_forward(pool, limit, depth=depth, max_rows=100_000)
