@@ -35,6 +35,12 @@ def main() -> None:
         default=3,
         help="chain runs (distinct constant pools) per many-target puzzle",
     )
+    parser.add_argument(
+        "--seed-offset",
+        type=int,
+        default=0,
+        help="first chain seed (a different offset gives different constant pools)",
+    )
     args = parser.parse_args()
 
     puzzles = load_puzzles(args.puzzles)
@@ -43,7 +49,11 @@ def main() -> None:
     baseline = load_submission(args.baseline)
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(
-            pool.map(partial(solve_one, seeds=args.seeds), puzzles, chunksize=4)
+            pool.map(
+                partial(solve_one, seeds=args.seeds, seed_offset=args.seed_offset),
+                puzzles,
+                chunksize=4,
+            )
         )
     candidates: dict[str, dict[str, list[list]]] = {}
     for puzzle, programs in zip(puzzles, results, strict=True):
