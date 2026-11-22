@@ -9,6 +9,9 @@ from elf_abacus.verifier import Puzzle
 # From the per-variant win table in ADR 0010: with this many targets the largest pool with pair
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
+BIG_VIRTUAL = (
+    300  # registers the later seeds plan on; recompiled into the real file afterwards
+)
 BIG_POOL = 10  # ADR 0015: smaller pools beat 16 once grow + relate + keep_inner are on
 SMALL_GROW_POOLS = (6, 8, 10)
 SMALL_GROW_SEEDS = (0, 1)
@@ -39,6 +42,9 @@ class ChainRun:
     relate: bool = False
     keep_inner: bool = False
     retain: bool = False
+    virtual: int = (
+        0  # plan on this many registers, then recompile into the real file (0: off)
+    )
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,7 @@ def route(puzzle: Puzzle, seeds: int = 3) -> Route:
                     relate=True,
                     keep_inner=True,
                     retain=True,
+                    virtual=BIG_VIRTUAL if seed else 0,
                 )
                 for seed in range(seeds)
             ),

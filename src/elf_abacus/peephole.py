@@ -7,10 +7,11 @@ and re-allocate registers; the verifier is the oracle for the result (ADR 0002).
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
-from elf_abacus.verifier import InvalidProgram, Puzzle, verify
+from elf_abacus.verifier import MAX_INSTRUCTIONS, InvalidProgram, Puzzle, verify
 
 Program = list[list]
 
@@ -423,3 +424,143 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
     except InvalidProgram:
         return program
     return candidate
+
+
+def _allocate_with_recompute(
+    puzzle: Puzzle, nodes: list[_Node], order: list[int]
+) -> Program | None:
+    """Register allocation that recomputes a value instead of failing when registers run out.
+
+    Walks `order` (operands first). When no register is free, the resident computed value whose
+    next use is furthest away is overwritten; if it is needed again it is recomputed then, from
+    operands that are themselves recomputed if they were overwritten too. Starting values cannot
+    be recomputed, so they are never overwritten while still needed. None if even that fails.
+    """
+    consumers: dict[int, list[int]] = {}
+    for n in order:
+        for operand in {nodes[n].a, nodes[n].b}:
+            consumers.setdefault(operand, []).append(n)
+    position = {n: step for step, n in enumerate(order)}
+    reg_of: dict[int, int] = {}
+    free = set(range(puzzle.registers))
+    for reg, value in enumerate(puzzle.starting_values):
+        start = next(
+            i for i, nd in enumerate(nodes) if nd.op is None and nd.value == value
+        )
+        if start not in reg_of:
+            reg_of[start] = reg
+            free.discard(reg)
+    held = set(reg_of.values())
+    free.update(r for r in range(len(puzzle.starting_values)) if r not in held)
+    out: Program = []
+    produced: set[int] = set()
+
+    def needed(x: int, memo: dict[int, bool]) -> bool:
+        """x is read by a step still to run, or by a value that would have to be recomputed."""
+        if x not in memo:
+            memo[x] = False
+            memo[x] = any(
+                c not in produced or (c not in reg_of and needed(c, memo))
+                for c in consumers.get(x, ())
+            )
+        return memo[x]
+
+    def release_dead() -> None:
+        memo: dict[int, bool] = {}
+        for x in list(reg_of):
+            if not needed(x, memo):
+                free.add(reg_of.pop(x))
+
+    def next_use(x: int) -> int:
+        return min(
+            (position[c] for c in consumers.get(x, ()) if c not in produced),
+            default=1 << 30,
+        )
+
+    def claim(pinned: set[int]) -> int | None:
+        if free:
+            reg = min(free)
+            free.discard(reg)
+            return reg
+        victims = [x for x in reg_of if x not in pinned and nodes[x].op is not None]
+        if not victims:
+            return None
+        # furthest next use first; among ties, the one whose operands are still resident
+        victim = max(
+            victims,
+            key=lambda x: (
+                next_use(x),
+                -((nodes[x].a not in reg_of) + (nodes[x].b not in reg_of)),
+            ),
+        )
+        return reg_of.pop(victim)
+
+    def ensure(x: int, pinned: set[int]) -> bool:
+        if x in reg_of:
+            return True
+        node = nodes[x]
+        if node.op is None:
+            return False
+        pin = pinned | {node.a, node.b}
+        if not (ensure(node.a, pin) and ensure(node.b, pin)):
+            return False
+        ra, rb = reg_of[node.a], reg_of[node.b]
+        dest = claim(pin)
+        if dest is None:
+            return False
+        out.append([node.op, ra, rb, dest])
+        reg_of[x] = dest
+        release_dead()
+        return len(out) <= MAX_INSTRUCTIONS
+
+    for n in order:
+        node = nodes[n]
+        operands = {node.a, node.b}
+        if not all(ensure(x, operands) for x in operands):
+            return None
+        ra, rb = reg_of[node.a], reg_of[node.b]
+        produced.add(n)
+        reg_of[n] = -1  # reserved: the result is about to exist
+        for x in operands:
+            if not needed(x, {}):
+                free.add(reg_of.pop(x))
+        dest = claim({x for x in (*operands, n) if x in reg_of})
+        if dest is None:
+            return None
+        out.append([node.op, ra, rb, dest])
+        reg_of[n] = dest
+        release_dead()
+        if len(out) > MAX_INSTRUCTIONS:
+            return None
+    return out
+
+
+def rematerialize(
+    puzzle: Puzzle, program: Program, virtual_registers: int
+) -> Program | None:
+    """Compile a program written for `virtual_registers` registers into `puzzle.registers`.
+
+    The program only has to be valid on a puzzle with the larger register file. Its value DAG is
+    pruned to what the targets need and re-allocated with recomputation (see
+    `_allocate_with_recompute`), trying production order and depth-first order. Returns the
+    shortest verified result, or None if no order fits.
+    """
+    virtual = dataclasses.replace(puzzle, registers=virtual_registers)
+    try:
+        verify(virtual, program)
+    except InvalidProgram:
+        return None
+    nodes = _build_dag(virtual, program)
+    by_value = {node.value: n for n, node in enumerate(nodes)}
+    keep = _reachable(nodes, {by_value[t] for t in puzzle.targets})
+    best: Program | None = None
+    for order in (_topological_order(nodes, keep), _depth_first_order(nodes, keep)):
+        candidate = _allocate_with_recompute(puzzle, nodes, order)
+        if candidate is None or (best is not None and len(candidate) >= len(best)):
+            continue
+        try:
+            verify(puzzle, candidate)
+        except InvalidProgram:
+            continue
+        best = candidate
+    return best

@@ -1,7 +1,7 @@
 import pytest
 
 from elf_abacus import run
-from elf_abacus.router import ChainRun, features, route
+from elf_abacus.router import BIG_VIRTUAL, ChainRun, features, route
 from elf_abacus.verifier import Puzzle, verify
 
 BIG = Puzzle("big", [4, 22], list(range(1000, 1040)), 10**12)
@@ -34,6 +34,11 @@ def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
     assert {(c.pool_size, c.pairs) for c in plan.chains} == {(10, True)}
+
+
+def test_shouldPlanOnVirtualRegistersWhenBigPuzzleSeedIsNotTheFirst():
+    plan = route(BIG, seeds=3)
+    assert [c.virtual for c in plan.chains] == [0, BIG_VIRTUAL, BIG_VIRTUAL]
 
 
 def test_shouldRunGrowRelateKeepInnerSmallPoolsWhenFewTargets():

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+
+from elf_abacus.peephole import rematerialize
 from elf_abacus.router import ChainRun, route
 from elf_abacus.solvers import chain, horner
 from elf_abacus.verifier import InvalidProgram, Puzzle, verify
@@ -21,8 +24,9 @@ def _shortest(puzzle: Puzzle, programs: list[list[list] | None]) -> list[list] |
 
 
 def _run_chain(puzzle: Puzzle, c: ChainRun) -> list[list] | None:
-    return chain.solve(
-        puzzle,
+    planned = dataclasses.replace(puzzle, registers=c.virtual) if c.virtual else puzzle
+    program = chain.solve(
+        planned,
         pool_size=c.pool_size,
         pairs=c.pairs,
         seed=c.seed,
@@ -31,6 +35,9 @@ def _run_chain(puzzle: Puzzle, c: ChainRun) -> list[list] | None:
         keep_inner=c.keep_inner,
         retain=c.retain,
     )
+    if program is None or not c.virtual:
+        return program
+    return rematerialize(puzzle, program, c.virtual)
 
 
 def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:

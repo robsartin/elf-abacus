@@ -30,6 +30,7 @@ REQUIRED_SLUGS = {
     "0013": "intermediate-pool-members-and-target-order",
     "0014": "lookahead-retention-of-full-registers",
     "0015": "retune-router-pools-for-grown-chains",
+    "0016": "virtual-registers-and-recompute",
 }
 
 
