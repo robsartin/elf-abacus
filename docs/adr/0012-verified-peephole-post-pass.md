@@ -48,3 +48,11 @@ It is accepted only when the live set shrinks, the programs still fit in the reg
 verifier passes. On the whole-set output it saved 1,843 of 196,977 instructions (0.94%); the full
 pass costs about 2.6 s per program. Not tried: multi-consumer helpers and chains replaced by two or
 more new helpers.
+
+## Amendment 2026-11-22: multi-helper rebuilds
+
+`_rederive_with_helpers` (with `_rebuilds` and `_private_chain`) in `src/elf_abacus/peephole.py`
+generalises the pair-helper rewrite: any live node can be rebuilt from live values plus zero, one
+or two new values, accepted when its private helper chain is longer than the new values it needs,
+the registers still fit and the verifier passes. Whole-set effect: 188,783 to 186,213 (about
+1.1%) on top of the earlier rounds. Still not tried: multi-consumer helpers.

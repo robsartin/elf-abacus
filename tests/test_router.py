@@ -1,7 +1,7 @@
 import pytest
 
 from elf_abacus import run
-from elf_abacus.router import ChainRun, features, route
+from elf_abacus.router import BIG_VIRTUAL, ChainRun, features, route
 from elf_abacus.verifier import Puzzle, verify
 
 BIG = Puzzle("big", [4, 22], list(range(1000, 1040)), 10**12)
@@ -34,6 +34,11 @@ def test_shouldAddOneSeedPerBudgetUnitWhenPuzzleIsBig():
     plan = route(BIG, seeds=3)
     assert [c.seed for c in plan.chains] == [0, 1, 2]
     assert {(c.pool_size, c.pairs) for c in plan.chains} == {(10, True)}
+
+
+def test_shouldPlanOnVirtualRegistersWhenBigPuzzleSeedIsNotTheFirst():
+    plan = route(BIG, seeds=3)
+    assert [c.virtual for c in plan.chains] == [0, BIG_VIRTUAL, BIG_VIRTUAL]
 
 
 def test_shouldRunGrowRelateKeepInnerSmallPoolsWhenFewTargets():
@@ -136,3 +141,23 @@ def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monke
             "retain": False,
         }
     ]
+
+
+HUGE = Puzzle("huge", [4, 22], [2**55 + k for k in range(32)], 2**60)
+
+
+@pytest.mark.parametrize("seeds", [1, 3])
+def test_shouldRouteTwoPoolTwentySeedsWhenEveryTargetIsAtLeast2To54(seeds):
+    plan = route(HUGE, seeds=seeds)
+    assert plan.horner
+    assert [(c.pool_size, c.seed) for c in plan.chains] == [(20, 0), (20, 1)]
+    assert all(
+        c.pairs and c.grow and c.relate and c.keep_inner and c.retain
+        for c in plan.chains
+    )
+    assert [c.pool_size for c in plan.fallback] == [16, 24]
+
+
+def test_shouldKeepPoolTenRouteWhenSmallestTargetIsBelow2To54():
+    top = Puzzle("p", [4, 22], [2**54 - 1, *range(2**55, 2**55 + 31)], 2**60)
+    assert [c.pool_size for c in route(top, seeds=1).chains] == [10]
