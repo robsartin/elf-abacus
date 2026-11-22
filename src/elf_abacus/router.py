@@ -72,12 +72,12 @@ def features(puzzle: Puzzle) -> Features:
     )
 
 
-def route(puzzle: Puzzle, seeds: int = 3) -> Route:
+def route(puzzle: Puzzle, seeds: int = 3, seed_offset: int = 0) -> Route:
     """Big puzzles get `seeds` runs of the strongest chain; small ones a few small grown pools."""
     if features(puzzle).targets >= BIG_TARGETS:
-        pool, run_seeds = BIG_POOL, tuple(range(seeds))
+        pool, run_seeds = BIG_POOL, tuple(range(seed_offset, seed_offset + seeds))
         if min(puzzle.targets) >= 2**HUGE_TARGET_BITS:
-            pool, run_seeds = HUGE_POOL, HUGE_SEEDS
+            pool, run_seeds = HUGE_POOL, tuple(s + seed_offset for s in HUGE_SEEDS)
         return Route(
             True,
             tuple(

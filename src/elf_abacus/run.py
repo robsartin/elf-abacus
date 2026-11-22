@@ -40,9 +40,11 @@ def _run_chain(puzzle: Puzzle, c: ChainRun) -> list[list] | None:
     return rematerialize(puzzle, program, c.virtual)
 
 
-def solve_one(puzzle: Puzzle, seeds: int = 3) -> dict[str, list[list] | None]:
+def solve_one(
+    puzzle: Puzzle, seeds: int = 3, seed_offset: int = 0
+) -> dict[str, list[list] | None]:
     """Each routed solver's best program for one puzzle (module-level so it can run in a worker)."""
-    plan = route(puzzle, seeds)
+    plan = route(puzzle, seeds, seed_offset)
     best = _shortest(puzzle, [_run_chain(puzzle, c) for c in plan.chains])
     for c in plan.fallback:
         if best is not None:

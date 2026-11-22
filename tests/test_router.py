@@ -125,7 +125,7 @@ def test_shouldPassGrowRelateAndKeepInnerToTheChainSolverWhenRunningARoute(monke
     monkeypatch.setattr(
         run,
         "route",
-        lambda puzzle, seeds: Route(
+        lambda puzzle, seeds, seed_offset: Route(
             False, (ChainRun(36, True, 1, grow=True, relate=True, keep_inner=True),)
         ),
     )
@@ -161,3 +161,9 @@ def test_shouldRouteTwoPoolTwentySeedsWhenEveryTargetIsAtLeast2To54(seeds):
 def test_shouldKeepPoolTenRouteWhenSmallestTargetIsBelow2To54():
     top = Puzzle("p", [4, 22], [2**54 - 1, *range(2**55, 2**55 + 31)], 2**60)
     assert [c.pool_size for c in route(top, seeds=1).chains] == [10]
+
+
+def test_shouldStartSeedsAtTheOffsetWhenSeedOffsetIsGiven():
+    plan = route(BIG, seeds=3, seed_offset=10)
+    assert [c.seed for c in plan.chains] == [10, 11, 12]
+    assert [c.virtual for c in plan.chains] == [BIG_VIRTUAL] * 3
