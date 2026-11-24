@@ -15,6 +15,8 @@ from elf_abacus.verifier import MAX_INSTRUCTIONS, InvalidProgram, Puzzle, verify
 
 Program = list[list]
 
+COST_HORIZON = 20  # a value needed at least this many productions ahead counts as "far"
+
 
 @dataclass
 class _Node:
@@ -426,8 +428,27 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
     return candidate
 
 
+def one_op_from(resident: set[int], want: int) -> tuple[str, int, int] | None:
+    """A single instruction over two resident values that yields `want`: (op, left, right)."""
+    for p in sorted(resident):
+        q = want - p
+        if q > 0 and q in resident:
+            return ("+", p, q)
+        q = p - want
+        if q > 0 and q in resident:
+            return ("-", p, q)
+        if p > 1 and want % p == 0 and want // p in resident:
+            return ("*", p, want // p)
+        if want * p in resident:
+            return ("/", want * p, p)
+    return None
+
+
 def _allocate_with_recompute(
-    puzzle: Puzzle, nodes: list[_Node], order: list[int]
+    puzzle: Puzzle,
+    nodes: list[_Node],
+    order: list[int],
+    cost_aware: bool = False,
 ) -> Program | None:
     """Register allocation that recomputes a value instead of failing when registers run out.
 
@@ -435,6 +456,10 @@ def _allocate_with_recompute(
     next use is furthest away is overwritten; if it is needed again it is recomputed then, from
     operands that are themselves recomputed if they were overwritten too. Starting values cannot
     be recomputed, so they are never overwritten while still needed. None if even that fails.
+
+    A value is rebuilt with one instruction over any two resident values when such a pair exists
+    (`one_op_from`), else from its original operands. With `cost_aware`, the victim among values
+    needed only far ahead is the one cheapest to rebuild rather than the furthest-used.
     """
     consumers: dict[int, list[int]] = {}
     for n in order:
@@ -477,6 +502,38 @@ def _allocate_with_recompute(
             default=1 << 30,
         )
 
+    def victim_key(x: int) -> tuple:
+        use = next_use(x)
+        if cost_aware:
+            far = use - len(produced) >= COST_HORIZON
+            held = reg_of.pop(x)  # price the rebuild as if x were already gone
+            try:
+                cost = rebuild_cost(x) if use < 1 << 30 else 0
+            finally:
+                reg_of[x] = held
+            return (far, -cost if far else 0, use)
+        # furthest next use first; among ties, the one whose operands are still resident
+        return (use, -((nodes[x].a not in reg_of) + (nodes[x].b not in reg_of)))
+
+    def alternative(x: int) -> tuple[str, int, int] | None:
+        node_of = {nodes[n].value: n for n in reg_of if n != x and reg_of[n] >= 0}
+        found = one_op_from(set(node_of), nodes[x].value)
+        return (
+            None if found is None else (found[0], node_of[found[1]], node_of[found[2]])
+        )
+
+    def rebuild_cost(x: int, depth: int = 0) -> int:
+        if x in reg_of:
+            return 0
+        node = nodes[x]
+        if node.op is None:
+            return 99
+        if alternative(x) is not None:
+            return 1
+        if depth > 6:
+            return 5
+        return 1 + rebuild_cost(node.a, depth + 1) + rebuild_cost(node.b, depth + 1)
+
     def claim(pinned: set[int]) -> int | None:
         if free:
             reg = min(free)
@@ -485,14 +542,7 @@ def _allocate_with_recompute(
         victims = [x for x in reg_of if x not in pinned and nodes[x].op is not None]
         if not victims:
             return None
-        # furthest next use first; among ties, the one whose operands are still resident
-        victim = max(
-            victims,
-            key=lambda x: (
-                next_use(x),
-                -((nodes[x].a not in reg_of) + (nodes[x].b not in reg_of)),
-            ),
-        )
+        victim = max(victims, key=victim_key)
         return reg_of.pop(victim)
 
     def ensure(x: int, pinned: set[int]) -> bool:
@@ -501,6 +551,16 @@ def _allocate_with_recompute(
         node = nodes[x]
         if node.op is None:
             return False
+        alt = alternative(x)
+        if alt is not None:
+            op, p, q = alt
+            dest = claim(pinned | {p, q})
+            if dest is None:
+                return False
+            out.append([op, reg_of[p], reg_of[q], dest])
+            reg_of[x] = dest
+            release_dead()
+            return len(out) <= MAX_INSTRUCTIONS
         pin = pinned | {node.a, node.b}
         if not (ensure(node.a, pin) and ensure(node.b, pin)):
             return False
@@ -555,12 +615,13 @@ def rematerialize(
     keep = _reachable(nodes, {by_value[t] for t in puzzle.targets})
     best: Program | None = None
     for order in (_topological_order(nodes, keep), _depth_first_order(nodes, keep)):
-        candidate = _allocate_with_recompute(puzzle, nodes, order)
-        if candidate is None or (best is not None and len(candidate) >= len(best)):
-            continue
-        try:
-            verify(puzzle, candidate)
-        except InvalidProgram:
-            continue
-        best = candidate
+        for cost_aware in (False, True):
+            candidate = _allocate_with_recompute(puzzle, nodes, order, cost_aware)
+            if candidate is None or (best is not None and len(candidate) >= len(best)):
+                continue
+            try:
+                verify(puzzle, candidate)
+            except InvalidProgram:
+                continue
+            best = candidate
     return best

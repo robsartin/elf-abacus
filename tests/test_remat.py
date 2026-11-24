@@ -3,7 +3,7 @@ import itertools
 
 import pytest
 
-from elf_abacus.peephole import rematerialize
+from elf_abacus.peephole import one_op_from, rematerialize
 from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 
 VALUES = [5, 6, 7, 9, 11]
@@ -51,3 +51,26 @@ def test_shouldReturnNoneWhenStartingValuesCannotBeRecomputed():
     wide, program = _wide_puzzle(40)
     tiny = dataclasses.replace(wide, registers=2)
     assert rematerialize(tiny, program, virtual_registers=40) is None
+
+
+@pytest.mark.parametrize(
+    ("resident", "want", "expected_op"),
+    [
+        ({3, 4}, 7, "+"),
+        ({10, 3}, 7, "-"),
+        ({7, 2}, 14, "*"),
+        ({20, 5}, 4, "/"),
+    ],
+)
+def test_shouldFindOneOpExpressionWhenResidentValuesCombineToTarget(
+    resident, want, expected_op
+):
+    found = one_op_from(resident, want)
+    assert found is not None
+    op, a, b = found
+    assert op == expected_op
+    assert {"+": a + b, "-": a - b, "*": a * b, "/": a // b}[op] == want
+
+
+def test_shouldReturnNoneWhenNoResidentPairProducesValue():
+    assert one_op_from({3, 5}, 100) is None
