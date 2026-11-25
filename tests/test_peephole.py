@@ -109,3 +109,13 @@ def test_shouldReplaceAPrivateChainWithTwoNewHelpersWhenThatNetsASaving():
     out = optimize(puzzle, program)
     verify(puzzle, out)
     assert len(out) == 4
+
+
+def test_shouldRebuildSeveralReadersWhenTheirSharedHelperChainDiesWithThem():
+    # 15 = 5*3 feeds 45 and 20, and 45 feeds 50: no single rebuild kills the chain,
+    # but 25 = 5*5, 50 = 25+25, 20 = 25-5 reach both targets in three steps instead of four.
+    puzzle = Puzzle("p", [5, 3], [20, 50], 400)
+    program = [["*", 1, 0, 2], ["*", 2, 1, 3], ["+", 3, 0, 4], ["+", 0, 2, 5]]
+    out = optimize(puzzle, program)
+    assert len(out) == 3
+    verify(puzzle, out)

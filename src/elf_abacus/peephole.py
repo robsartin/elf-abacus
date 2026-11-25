@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from itertools import islice
 
 from elf_abacus.verifier import MAX_INSTRUCTIONS, InvalidProgram, Puzzle, verify
 
@@ -153,15 +154,22 @@ def _private_chain(
     nodes: list[_Node], roots: set[int], consumers: dict[int, list[int]], w: int
 ) -> set[int]:
     """Non-target operation nodes that die if w stops reading its operands (w itself stays)."""
+    return _private_chain_of(nodes, roots, consumers, {w})
+
+
+def _private_chain_of(
+    nodes: list[_Node], roots: set[int], consumers: dict[int, list[int]], ws: set[int]
+) -> set[int]:
+    """Non-target operation nodes that die if every node in `ws` stops reading its operands."""
     dead: set[int] = set()
     changed = True
     while changed:
         changed = False
-        stack = [nodes[w].a, nodes[w].b]
+        stack = [m for w in ws for m in (nodes[w].a, nodes[w].b)]
         seen: set[int] = set()
         while stack:
             n = stack.pop()
-            if n in seen or n == w:
+            if n in seen or n in ws:
                 continue
             seen.add(n)
             if n in dead:
@@ -169,7 +177,7 @@ def _private_chain(
             elif (
                 nodes[n].op is not None
                 and n not in roots
-                and all(c in dead or c == w for c in consumers[n])
+                and all(c in dead or c in ws for c in consumers[n])
             ):
                 dead.add(n)
                 changed = True
@@ -298,6 +306,114 @@ def _rederive_with_helpers(
     return None
 
 
+def _rederive_multi(
+    nodes: list[_Node],
+    roots: set[int],
+    live: set[int],
+    limit: int,
+    fits: Callable[[set[int]], bool],
+    max_plans: int = 12,
+) -> set[int] | None:
+    """One rewrite that rebuilds several nodes at once so that a shared helper chain dies.
+
+    A group is every reader of one non-target node, or any pair of nodes whose shared ancestors
+    die only when both are rebuilt. The group's nodes are rebuilt one after the other from live
+    values plus at most one new value each (a later one may reuse an earlier one's new value).
+    It is accepted when the nodes that die outnumber the new ones and the registers still fit.
+    Returns the new live set (nodes mutated), or None when no such rewrite exists.
+    """
+    index = _pair_index(nodes, live)
+    consumers: dict[int, list[int]] = {n: [] for n in live}
+    for w in live:
+        if nodes[w].op:
+            for operand in {nodes[w].a, nodes[w].b}:
+                consumers[operand].append(w)
+    for group in _groups(nodes, roots, live, consumers):
+        dead = _private_chain_of(nodes, roots, consumers, set(group))
+        found = _rebuild_readers(
+            nodes, roots, live, limit, fits, index, dead, group, max_plans
+        )
+        if found is not None:
+            return found
+    return None
+
+
+def _groups(
+    nodes: list[_Node],
+    roots: set[int],
+    live: set[int],
+    consumers: dict[int, list[int]],
+) -> Iterator[list[int]]:
+    """Candidate node groups whose joint rebuild could kill a chain no single rebuild kills."""
+    ops = sorted((n for n in live if nodes[n].op), reverse=True)
+    own = {n: _private_chain_of(nodes, roots, consumers, {n}) for n in ops}
+    for u in ops:
+        if u not in roots and 2 <= len(consumers[u]) <= 4:
+            readers = sorted(consumers[u], reverse=True)
+            dead = _private_chain_of(nodes, roots, consumers, set(readers))
+            if u in dead and len(dead) >= 2:
+                yield readers
+    for i, w1 in enumerate(ops):
+        for w2 in ops[i + 1 :]:
+            dead = _private_chain_of(nodes, roots, consumers, {w1, w2})
+            if len(dead) >= 2 and len(dead) > len(own[w1] | own[w2]):
+                yield [w1, w2]
+
+
+def _rebuild_readers(
+    nodes: list[_Node],
+    roots: set[int],
+    live: set[int],
+    limit: int,
+    fits: Callable[[set[int]], bool],
+    index: dict[int, list[tuple[str, int, int]]],
+    dead: set[int],
+    readers: list[int],
+    max_plans: int,
+) -> set[int] | None:
+    original = len(nodes)
+
+    def attempt(i: int, spent: int) -> set[int] | None:
+        if i == len(readers):
+            reach = _reachable(nodes, roots)
+            return reach if len(reach) < len(live) and fits(reach) else None
+        w = readers[i]
+        memo: dict[int, set[int]] = {}
+
+        def reaches(n: int) -> set[int]:
+            if n not in memo:
+                memo[n] = _reachable(nodes, {n})
+            return memo[n]
+
+        pool = {
+            nodes[n].value: n
+            for n in [*live, *range(original, len(nodes))]
+            if n not in dead and n != w and w not in reaches(n)
+        }
+        for new_values in (0, 1):
+            if spent + new_values >= len(dead):
+                break
+            plans = _rebuilds(nodes, w, pool, index, dead, limit, new_values, reaches)
+            for new, op, (a, b) in islice(plans, max_plans):
+                saved = (nodes[w].op, nodes[w].a, nodes[w].b)
+                base = len(nodes)
+
+                def real(ref: int, base: int = base) -> int:
+                    return base - 1 - ref if ref < 0 else ref
+
+                for value, made_op, p, q in new:
+                    nodes.append(_Node(value, made_op, real(p), real(q)))
+                nodes[w].op, nodes[w].a, nodes[w].b = op, real(a), real(b)
+                found = attempt(i + 1, spent + new_values)
+                if found is not None:
+                    return found
+                del nodes[base:]
+                nodes[w].op, nodes[w].a, nodes[w].b = saved
+        return None
+
+    return attempt(0, 0)
+
+
 def _depth_first_order(nodes: list[_Node], keep: set[int]) -> list[int]:
     """Operands-first order that finishes each subtree before starting the next (low pressure)."""
     order: list[int] = []
@@ -413,6 +529,8 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
             )
             if more is not None:
                 break
+        if more is None:
+            more = _rederive_multi(nodes, roots, live, puzzle.value_limit, fits)
         if more is None:
             break
         live = _rederive(nodes, roots, more, fits)
