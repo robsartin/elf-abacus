@@ -56,3 +56,14 @@ generalises the pair-helper rewrite: any live node can be rebuilt from live valu
 or two new values, accepted when its private helper chain is longer than the new values it needs,
 the registers still fit and the verifier passes. Whole-set effect: 188,783 to 186,213 (about
 1.1%) on top of the earlier rounds. Still not tried: multi-consumer helpers.
+
+## Amendment 2026-11-24: multi-consumer groups
+
+`_rederive_multi` (with `_groups` and `_rebuild_readers`) in `src/elf_abacus/peephole.py` rebuilds
+a group of nodes together: every reader of one shared helper, or any pair of nodes whose shared
+ancestors die only when both are rebuilt. Each member is rebuilt from live values plus at most one
+new value (later members may reuse earlier members' new values), accepted when more nodes die than
+are added, the registers fit and the verifier passes. On `submissions/final4.csv` it saved 52 of
+179,209 instructions (0.03%) over 38 programs, for about 0.5 s extra per program: the programs
+were already near a fixpoint of local rewriting, so further peephole variants are unlikely to pay.
+Not tried: groups of three or more that are not readers of one helper, two new values per member.
