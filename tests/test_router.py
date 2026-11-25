@@ -167,3 +167,10 @@ def test_shouldStartSeedsAtTheOffsetWhenSeedOffsetIsGiven():
     plan = route(BIG, seeds=3, seed_offset=10)
     assert [c.seed for c in plan.chains] == [10, 11, 12]
     assert [c.virtual for c in plan.chains] == [BIG_VIRTUAL] * 3
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_shouldPlanOnSixtyFourVirtualRegistersWhenSeedIsNotTheFirst(seed):
+    """Round 9 sweep: planning on 64 beat 300 by about 1% (sizes 128 to 300 plan identically)."""
+    plan = route(BIG, seeds=1, seed_offset=seed)
+    assert [c.virtual for c in plan.chains] == [64]

@@ -45,3 +45,13 @@ pools were not the lever.
   on puzzles that already fit.
 - **Planning on all virtual seeds:** puzzles whose plan overflows (peak 55 to 57) lost up to 3.6%
   against the real-file plan, so seed 0 stays real as the safe candidate.
+
+## Amendment 2026-11-24: virtual size is 64, not 300
+This corrects the "300 registers" in the Decision above (the constant is `BIG_VIRTUAL` in
+`src/elf_abacus/router.py`, which is the authority). A five-puzzle sweep (seed 1, pool 10) planned at
+64, 128, 200 and 300 registers: 128, 200 and 300 produced the same programs on every puzzle (the
+plan never wants more than 128), so only the small size differs. Totals after `optimize`: 64 gave
+1,203 against 1,217 at 300; on seeds 2 and 3 the pairs were 1,209 vs 1,197 and 1,172 vs 1,201. Best
+of three seeds: 1,164 at 64 against 1,179 at 300. Best-of-three over three sizes at one seed (1,198)
+did not beat three seeds at 300 (1,179): sizes diversify worse than seeds. Five puzzles is a small
+sample; the gain is about 1% and not yet confirmed on the 43-puzzle evaluation set.
