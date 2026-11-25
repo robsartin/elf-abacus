@@ -46,6 +46,17 @@ pools were not the lever.
 - **Planning on all virtual seeds:** puzzles whose plan overflows (peak 55 to 57) lost up to 3.6%
   against the real-file plan, so seed 0 stays real as the safe candidate.
 
+## Amendment (2026-11-24): cheaper rebuilds
+Measured on 38 many-target puzzles (every 20th with at least 15 targets, seed-1 plans on 300 virtual
+registers, plans cached): the pruned value DAG is 7,344 instructions and the original compile 7,500,
+so recompute overhead is 156 instructions (2.1%) and is the ceiling for any compile-side lever.
+`rematerialize` now also rebuilds an evicted value with one instruction over any two resident values
+(`one_op_from`) before falling back to its original operands, and tries a cost-aware victim rule
+(among values needed 20 or more productions ahead, evict the cheapest to rebuild) next to the
+furthest-use rule, keeping the shortest verified result: 7,473 (-0.36%; -0.36% after `optimize`).
+Rejected in the same measurement: a rollout lookahead over the 2 to 6 best victims at every eviction
+reached 7,469 at best, so eviction choice is not where the remaining ~125 instructions are.
+
 ## Amendment 2026-11-24: virtual size is 64, not 300
 This corrects the "300 registers" in the Decision above (the constant is `BIG_VIRTUAL` in
 `src/elf_abacus/router.py`, which is the authority). A five-puzzle sweep (seed 1, pool 10) planned at
