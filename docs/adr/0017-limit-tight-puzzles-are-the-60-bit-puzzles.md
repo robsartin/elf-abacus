@@ -1,8 +1,8 @@
 # 0017. Value-limit-tight puzzles are the 60-bit puzzles; no route change
 
-Status: Accepted (2026-11-24), a negative result
+Status: Accepted (2026-11-24)
 
-Extends ADR 0010 (round-five huge-target route); it does not change it.
+A negative result: no route change. Extends ADR 0010 (round-five huge-target route); it does not change it.
 
 ## Context
 About 126 puzzles have `value_limit` within 5% of their largest target and average ~300
