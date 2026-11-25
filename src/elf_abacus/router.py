@@ -10,7 +10,7 @@ from elf_abacus.verifier import Puzzle
 # search won ~every puzzle, and the other five chain variants only added time.
 BIG_TARGETS = 15
 BIG_VIRTUAL = (
-    300  # registers the later seeds plan on; recompiled into the real file afterwards
+    64  # registers the later seeds plan on; recompiled into the real file afterwards
 )
 BIG_POOL = 10  # ADR 0015: smaller pools beat 16 once grow + relate + keep_inner are on
 # Random 60-bit targets with few starting values (ADR 0010 round five): pool 20 with two seeds beat
