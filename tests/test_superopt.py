@@ -108,3 +108,44 @@ def test_shouldWriteShorterSubmissionWhenRunFromTheCommandLine(tmp_path, capsys)
     main([*argv, str(tmp_path / "in.csv")])
     assert len(load_submission(out)["p1"]) == 1
     assert "2 -> 1" in capsys.readouterr().out
+
+
+def test_shouldShrinkAtLeastAsMuchAsEitherPassWhenAlternatedToFixpoint():
+    """A repeated value (peephole) and a three-step detour (window search) both go in one call."""
+    from elf_abacus.peephole import optimize
+    from elf_abacus.superopt import superoptimize_fixpoint
+
+    puzzle = Puzzle("p", [4, 6], [10, 20], 1000, registers=8)
+    program = [
+        ["+", 0, 0, 2],
+        ["-", 2, 0, 2],
+        ["+", 2, 1, 3],
+        ["+", 0, 1, 4],
+        ["+", 4, 3, 5],
+    ]
+    verify(puzzle, program)
+    out = superoptimize_fixpoint(puzzle, program)
+    verify(puzzle, out)
+    assert len(out) <= len(superoptimize(puzzle, program))
+    assert len(out) <= len(optimize(puzzle, program))
+    assert len(out) < len(program)
+
+
+def test_shouldReturnInputWhenFixpointProgramIsInvalid():
+    """An invalid input comes back untouched from the alternating driver too."""
+    from elf_abacus.superopt import superoptimize_fixpoint
+
+    puzzle = Puzzle("p", [2, 3], [99], 1000, registers=6)
+    program = [["+", 0, 1, 2]]
+    assert superoptimize_fixpoint(puzzle, program) == program
+
+
+def test_shouldStillFindHelperRouteWhenNeededValueIsUnreachableInOneStep():
+    """40 is no single step from [4, 6]; the search must build the helper 10 first (guards the
+    blocked-need helper pruning: helpers are offered only for needs with no direct route)."""
+    puzzle = Puzzle("p", [4, 6], [40], 1000, registers=8)
+    program = [["+", 0, 1, 2], ["+", 2, 2, 3], ["+", 3, 3, 4]]
+    verify(puzzle, program)
+    out = shrink_window(puzzle, program, 0, 3)
+    assert out is not None and len(out) == 2
+    verify(puzzle, out)

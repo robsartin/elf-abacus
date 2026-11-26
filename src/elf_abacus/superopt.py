@@ -52,11 +52,28 @@ def _apply(op: str, a: int, b: int, limit: int) -> int | None:
     return value if 0 < value <= limit else None
 
 
-def _one_step(state: State, want: int, limit: int, cap: int = STEP_CAP) -> list[Step]:
-    """Up to `cap` instructions (op, left reg, right reg) over `state` that yield `want`."""
+def _holders(state: State) -> dict[int, list[int]]:
+    """Registers holding each value."""
     holders: dict[int, list[int]] = {}
     for reg, value in state.items():
         holders.setdefault(value, []).append(reg)
+    return holders
+
+
+def _one_step(
+    state: State,
+    want: int,
+    limit: int,
+    cap: int = STEP_CAP,
+    holders: dict[int, list[int]] | None = None,
+) -> list[Step]:
+    """Up to `cap` instructions (op, left reg, right reg) over `state` that yield `want`.
+
+    `holders` is `_holders(state)` when the caller already has it (the search asks many wants
+    of one state).
+    """
+    if holders is None:
+        holders = _holders(state)
     seen: set[tuple[str, int, int]] = set()
     found: list[Step] = []
     for ra, a in state.items():
@@ -76,6 +93,8 @@ def _one_step(state: State, want: int, limit: int, cap: int = STEP_CAP) -> list[
                     continue
                 seen.add(key)
                 found.append((op, ra, rb, -1))
+                if len(found) >= cap:
+                    return found
     return found[:cap]
 
 
@@ -112,7 +131,19 @@ def _search(
     route to a wanted value is built into a scratch register first.
     """
 
+    dead: set[tuple[tuple[tuple[int, int], ...], frozenset[int], int]] = set()
+
     def dfs(st: State, produced: frozenset[int], budget: int) -> list[Step] | None:
+        key = (tuple(sorted(st.items())), produced, budget)
+        if key in dead:
+            return None
+        found = expand(st, produced, budget)
+        if found is None:
+            dead.add(key)
+        return found
+
+    def expand(st: State, produced: frozenset[int], budget: int) -> list[Step] | None:
+        held_by = _holders(st)
         wrong = {r: v for r, v in held.items() if st.get(r) != v}
         loose = {v for v in targets if v not in produced} - set(wrong.values())
         if not wrong and not loose:
@@ -121,20 +152,23 @@ def _search(
         if floor > budget:
             return None
         for reg, value in sorted(wrong.items()):
-            for op, ra, rb, _ in _one_step(st, value, limit):
+            for op, ra, rb, _ in _one_step(st, value, limit, cap=1, holders=held_by):
                 rest = dfs({**st, reg: value}, produced | {value}, budget - 1)
                 if rest is not None:
                     return [(op, ra, rb, reg), *rest]
         for value in sorted(loose):
-            for op, ra, rb, _ in _one_step(st, value, limit):
+            for op, ra, rb, _ in _one_step(st, value, limit, cap=1, holders=held_by):
                 for reg in scratch:
                     rest = dfs({**st, reg: value}, produced | {value}, budget - 1)
                     if rest is not None:
                         return [(op, ra, rb, reg), *rest]
         if budget > floor:
             needs = set(wrong.values()) | loose
-            for h in _helper_values(st, needs, limit):
-                for op, ra, rb, _ in _one_step(st, h, limit, cap=2):
+            blocked = {
+                n for n in needs if not _one_step(st, n, limit, cap=1, holders=held_by)
+            }
+            for h in _helper_values(st, blocked, limit):
+                for op, ra, rb, _ in _one_step(st, h, limit, cap=1, holders=held_by):
                     for reg in scratch:
                         made = produced | ({h} if h in targets else set())
                         rest = dfs({**st, reg: h}, made, budget - 1)
@@ -309,6 +343,32 @@ def superoptimize(
         current, found_at = step
         start = max(0, found_at - max_window)
     return current if len(current) < len(program) else program
+
+
+def superoptimize_fixpoint(
+    puzzle: Puzzle,
+    program: Program,
+    max_window: int = MAX_WINDOW,
+    span: int = MAX_SPAN,
+    seconds: float = 120.0,
+) -> Program:
+    """Alternate the window search and the DAG peephole until neither shortens the program.
+
+    A rewrite by one pass can leave a shape only the other sees (the peephole re-allocates
+    registers, which changes which windows are redundant). Never longer than the input.
+    """
+    from elf_abacus.peephole import optimize
+
+    deadline = time.monotonic() + seconds
+    current = program
+    while True:
+        before = len(current)
+        current = superoptimize(
+            puzzle, current, max_window, span, max(0.0, deadline - time.monotonic())
+        )
+        current = optimize(puzzle, current)
+        if len(current) >= before or time.monotonic() > deadline:
+            return current
 
 
 def _shrink(job: tuple[Puzzle, Program, int, int, float]) -> Program:
