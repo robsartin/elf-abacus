@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import multiprocessing
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 from elf_abacus.io import (
@@ -26,6 +26,10 @@ from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 Program = list[list]
 Derivation = tuple[str, int, int]  # op, left value, right value
 VIRTUAL_REGISTERS = 256
+BASES = 6  # starting candidates merged, shortest first
+REFINED = 2  # best merged plans refined by compiled length
+REFINE_BUDGET = 40  # compiled-length evaluations per refined plan
+UNFIT = 10**9  # cost of a plan that does not fit the register file
 
 
 def _virtual(puzzle: Puzzle) -> Puzzle:
@@ -116,10 +120,10 @@ def _compile(puzzle: Puzzle, chosen: Mapping[int, Derivation]) -> Program:
     return program
 
 
-def merge_derivations(
+def merge_plan(
     puzzle: Puzzle, base: Program, pool: Mapping[int, set[Derivation]]
-) -> Program | None:
-    """Fewest-values program (virtual registers) reached from `base` by swapping in pooled derivations."""
+) -> dict[int, Derivation] | None:
+    """Fewest-values plan reached from `base` by swapping in pooled derivations."""
     starts = set(puzzle.starting_values)
     roots = [t for t in puzzle.targets if t not in starts]
     nodes = _build_dag(_virtual(puzzle), base)
@@ -142,7 +146,54 @@ def merge_derivations(
                     break
             if improved:
                 break
-    return _compile(puzzle, current)
+    return current
+
+
+def merge_derivations(
+    puzzle: Puzzle, base: Program, pool: Mapping[int, set[Derivation]]
+) -> Program | None:
+    """`merge_plan` compiled to a program with a register per value (virtual registers)."""
+    plan = merge_plan(puzzle, base, pool)
+    return None if plan is None else _compile(puzzle, plan)
+
+
+def refine_by_cost(
+    puzzle: Puzzle,
+    plan: Mapping[int, Derivation],
+    pool: Mapping[int, set[Derivation]],
+    cost: Callable[[Mapping[int, Derivation]], int],
+    budget: int,
+) -> dict[int, Derivation]:
+    """First-improvement search over single-derivation swaps, scored by `cost` (at most `budget` calls).
+
+    The value count is only a proxy for the compiled length (registers force recomputation), so the
+    swaps are judged by the real objective instead; the result never costs more than `plan`.
+    """
+    starts = set(puzzle.starting_values)
+    roots = [t for t in puzzle.targets if t not in starts]
+    current = dict(plan)
+    current_cost = cost(current)
+    spent = 1
+    improved = True
+    while improved and spent < budget:
+        improved = False
+        for value in list(current):
+            for option in sorted(pool.get(value, ())):
+                if option == current[value]:
+                    continue
+                trial = _closure(pool, current, roots, starts, {value: option})
+                if trial is None or trial == current:
+                    continue
+                spent += 1
+                trial_cost = cost(trial)
+                if trial_cost < current_cost:
+                    current, current_cost, improved = trial, trial_cost, True
+                    break
+                if spent >= budget:
+                    return current
+            if improved:
+                break
+    return current
 
 
 def crossover(puzzle: Puzzle, candidates: Iterable[Program]) -> Program:
@@ -165,10 +216,23 @@ def crossover(puzzle: Puzzle, candidates: Iterable[Program]) -> Program:
     if not valid:
         raise InvalidProgram(f"{puzzle.id}: no valid candidate program")
     pool = derivations(puzzle, valid)
-    for base in sorted(valid, key=len)[:2]:
-        merged = merge_derivations(puzzle, base, pool)
-        if merged is None:
-            continue
+
+    def compiled_length(plan: Mapping[int, Derivation]) -> int:
+        program = _compile(puzzle, plan)
+        out = rematerialize(
+            puzzle, program, len(puzzle.starting_values) + len(program) + 1
+        )
+        return UNFIT if out is None else len(out)
+
+    plans: list[dict[int, Derivation]] = []
+    for base in sorted(valid, key=len)[:BASES]:
+        plan = merge_plan(puzzle, base, pool)
+        if plan is not None and plan not in plans:
+            plans.append(plan)
+    scored = sorted(((compiled_length(plan), i) for i, plan in enumerate(plans)))
+    for _, i in scored[:REFINED]:
+        plan = refine_by_cost(puzzle, plans[i], pool, compiled_length, REFINE_BUDGET)
+        merged = _compile(puzzle, plan)
         compiled = rematerialize(
             puzzle, merged, len(puzzle.starting_values) + len(merged) + 1
         )
