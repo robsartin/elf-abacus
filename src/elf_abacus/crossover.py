@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import heapq
 import multiprocessing
+import random
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -28,7 +30,8 @@ Derivation = tuple[str, int, int]  # op, left value, right value
 VIRTUAL_REGISTERS = 256
 BASES = 6  # starting candidates merged, shortest first
 REFINED = 2  # best merged plans refined by compiled length
-REFINE_BUDGET = 40  # compiled-length evaluations per refined plan
+REFINE_BUDGET = 10  # compiled-length evaluations per refined plan
+ORDER_TRIES = 40  # perturbed emission orders compiled per refined plan
 UNFIT = 10**9  # cost of a plan that does not fit the register file
 
 
@@ -196,6 +199,93 @@ def refine_by_cost(
     return current
 
 
+def _depth_first_values(puzzle: Puzzle, plan: Mapping[int, Derivation]) -> list[int]:
+    """Values in the order `_compile` emits them."""
+    seen = set(puzzle.starting_values)
+    order: list[int] = []
+
+    def visit(x: int) -> None:
+        if x in seen:
+            return
+        seen.add(x)
+        visit(plan[x][1])
+        visit(plan[x][2])
+        order.append(x)
+
+    for target in puzzle.targets:
+        visit(target)
+    return order
+
+
+def emit_in_priority_order(
+    puzzle: Puzzle,
+    plan: Mapping[int, Derivation],
+    priority: Callable[[int], float],
+) -> Program:
+    """Program with a register per value, emitting the ready value of lowest priority next.
+
+    Order decides how long values stay live, so it decides how much the 48-register compile has to
+    recompute; any priority still gives a valid program because operands always come first.
+    """
+    starts = len(puzzle.starting_values)
+    reg: dict[int, int] = {}
+    for i, value in enumerate(puzzle.starting_values):
+        reg.setdefault(value, i)
+    needed: set[int] = set()
+    stack = list(puzzle.targets)
+    while stack:
+        x = stack.pop()
+        if x in reg or x in needed:
+            continue
+        needed.add(x)
+        stack += [plan[x][1], plan[x][2]]
+    waiting = {x: len({plan[x][1], plan[x][2]} & needed) for x in needed}
+    users: dict[int, list[int]] = {}
+    for x in needed:
+        for operand in {plan[x][1], plan[x][2]} & needed:
+            users.setdefault(operand, []).append(x)
+    ready = [(priority(x), x) for x in needed if waiting[x] == 0]
+    heapq.heapify(ready)
+    program: Program = []
+    while ready:
+        _, x = heapq.heappop(ready)
+        op, a, b = plan[x]
+        reg[x] = starts + len(program)
+        program.append([op, reg[a], reg[b], reg[x]])
+        for user in users.get(x, ()):
+            waiting[user] -= 1
+            if waiting[user] == 0:
+                heapq.heappush(ready, (priority(user), user))
+    return program
+
+
+def search_orders(
+    puzzle: Puzzle,
+    plan: Mapping[int, Derivation],
+    cost: Callable[[Program], int],
+    tries: int,
+    seed: int,
+) -> Program:
+    """Lowest-cost emission of `plan` among the depth-first default and `tries` perturbed orders.
+
+    Each try keeps the default order's rank with noise of growing size (the last ones are fully
+    random), so the search ranges from small reshuffles to unrelated schedules.
+    """
+    best = _compile(puzzle, plan)
+    best_cost = cost(best)
+    value_rank = {x: i for i, x in enumerate(_depth_first_values(puzzle, plan))}
+    rng = random.Random(seed)
+    sigmas = (2.0, 8.0, 32.0, 1e9)
+    for i in range(tries):
+        sigma = sigmas[i % len(sigmas)]
+        noise = {x: value_rank.get(x, 0) + rng.gauss(0, sigma) for x in plan}
+        program = emit_in_priority_order(puzzle, plan, noise.__getitem__)
+        program_cost = cost(program)
+        if program_cost < best_cost:
+            best, best_cost = program, program_cost
+    return best
+
+
 def crossover(puzzle: Puzzle, candidates: Iterable[Program]) -> Program:
     """Shortest verified program built from the candidates' derivations; never longer than the best input."""
     valid: list[Program] = []
@@ -217,25 +307,28 @@ def crossover(puzzle: Puzzle, candidates: Iterable[Program]) -> Program:
         raise InvalidProgram(f"{puzzle.id}: no valid candidate program")
     pool = derivations(puzzle, valid)
 
-    def compiled_length(plan: Mapping[int, Derivation]) -> int:
-        program = _compile(puzzle, plan)
-        out = rematerialize(
+    def rematerialized(program: Program) -> Program | None:
+        return rematerialize(
             puzzle, program, len(puzzle.starting_values) + len(program) + 1
         )
+
+    def program_length(program: Program) -> int:
+        out = rematerialized(program)
         return UNFIT if out is None else len(out)
+
+    def plan_length(plan: Mapping[int, Derivation]) -> int:
+        return program_length(_compile(puzzle, plan))
 
     plans: list[dict[int, Derivation]] = []
     for base in sorted(valid, key=len)[:BASES]:
         plan = merge_plan(puzzle, base, pool)
         if plan is not None and plan not in plans:
             plans.append(plan)
-    scored = sorted(((compiled_length(plan), i) for i, plan in enumerate(plans)))
+    scored = sorted((plan_length(plan), i) for i, plan in enumerate(plans))
     for _, i in scored[:REFINED]:
-        plan = refine_by_cost(puzzle, plans[i], pool, compiled_length, REFINE_BUDGET)
-        merged = _compile(puzzle, plan)
-        compiled = rematerialize(
-            puzzle, merged, len(puzzle.starting_values) + len(merged) + 1
-        )
+        plan = refine_by_cost(puzzle, plans[i], pool, plan_length, REFINE_BUDGET)
+        merged = search_orders(puzzle, plan, program_length, ORDER_TRIES, seed=i)
+        compiled = rematerialized(merged)
         if compiled is None:
             continue
         compiled = optimize(puzzle, compiled)

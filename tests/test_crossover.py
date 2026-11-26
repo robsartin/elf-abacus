@@ -1,8 +1,10 @@
 from elf_abacus.crossover import (
     crossover,
     derivations,
+    emit_in_priority_order,
     merge_derivations,
     refine_by_cost,
+    search_orders,
 )
 from elf_abacus.verifier import Puzzle, verify
 
@@ -77,3 +79,32 @@ def test_shouldKeepPlanWhenNoSwapLowersCost():
     start = {3: ("+", 1, 2), 5: ("+", 3, 2)}
     best = refine_by_cost(puzzle, start, pool, len, budget=50)
     assert best == start
+
+
+ORDER_PLAN = {3: ("+", 1, 2), 4: ("+", 2, 2), 7: ("+", 3, 4)}
+ORDER_PUZZLE = Puzzle("p3", [1, 2], [7], 100)
+
+
+def test_shouldEmitByPriorityWhenValuesAreIndependent():
+    """emit_in_priority_order puts the lower-priority value first among ready values."""
+    first = emit_in_priority_order(ORDER_PUZZLE, ORDER_PLAN, {3: 1, 4: 0, 7: 2}.get)
+    second = emit_in_priority_order(ORDER_PUZZLE, ORDER_PLAN, {3: 0, 4: 1, 7: 2}.get)
+    assert first[0][:2] == [
+        "+",
+        1,
+    ]  # 2 + 2 = 4 first: both operands are starting register 1
+    assert second[0] == ["+", 0, 1, 2]  # 1 + 2 = 3 first
+    assert verify(ORDER_PUZZLE, first) == verify(ORDER_PUZZLE, second) == 3
+
+
+def test_shouldKeepOperandsFirstWhenPriorityPutsConsumerEarly():
+    """A consumer with the best priority still waits until its operands are emitted."""
+    program = emit_in_priority_order(ORDER_PUZZLE, ORDER_PLAN, {3: 5, 4: 6, 7: 0}.get)
+    assert verify(ORDER_PUZZLE, program) == 3
+    assert program[-1][:3] in (["+", 2, 3], ["+", 3, 2])
+
+
+def test_shouldNeverReturnWorseThanDefaultWhenSearchingOrders():
+    """search_orders keeps the lowest-cost program seen, including the default emission."""
+    best = search_orders(ORDER_PUZZLE, ORDER_PLAN, len, tries=5, seed=0)
+    assert verify(ORDER_PUZZLE, best) == 3
