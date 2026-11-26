@@ -27,7 +27,7 @@ class _Node:
     b: int = -1
 
 
-def _build_dag(puzzle: Puzzle, program: Program) -> list[_Node]:
+def build_dag(puzzle: Puzzle, program: Program) -> list[_Node]:
     """Distinct-value nodes in first-production order; later recomputations vanish."""
     nodes: list[_Node] = []
     by_value: dict[int, int] = {}
@@ -507,7 +507,7 @@ def optimize(puzzle: Puzzle, program: Program) -> Program:
         verify(puzzle, program)
     except InvalidProgram:
         return program
-    nodes = _build_dag(puzzle, program)
+    nodes = build_dag(puzzle, program)
     by_value = {node.value: n for n, node in enumerate(nodes)}
     roots = {by_value[t] for t in puzzle.targets}
 
@@ -728,7 +728,7 @@ def rematerialize(
         verify(virtual, program)
     except InvalidProgram:
         return None
-    nodes = _build_dag(virtual, program)
+    nodes = build_dag(virtual, program)
     by_value = {node.value: n for n, node in enumerate(nodes)}
     keep = _reachable(nodes, {by_value[t] for t in puzzle.targets})
     best: Program | None = None

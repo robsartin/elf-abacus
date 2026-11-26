@@ -76,7 +76,7 @@ def test_shouldKeepHelperWhenRemovingItWouldNotFitInRegisters():
 
     puzzle = Puzzle("p", [1, 2, 3], [6, 7], 1000)
     program = [["+", 0, 2, 3], ["+", 3, 1, 4], ["+", 3, 2, 5]]
-    nodes = peephole._build_dag(puzzle, program)
+    nodes = peephole.build_dag(puzzle, program)
     roots = {nodes_index for nodes_index, n in enumerate(nodes) if n.value in (6, 7)}
     live = peephole._reachable(nodes, roots)
     kept = peephole._rederive(nodes, roots, live, fits=lambda _live: False)

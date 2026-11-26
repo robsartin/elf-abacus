@@ -22,7 +22,7 @@ from elf_abacus.io import (
     score_submission,
     write_submission,
 )
-from elf_abacus.peephole import _build_dag, optimize, rematerialize
+from elf_abacus.peephole import build_dag, optimize, rematerialize
 from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 
 Program = list[list]
@@ -45,7 +45,7 @@ def derivations(
     """Every way each value was made by any of the programs (value-level, register names erased)."""
     pool: dict[int, set[Derivation]] = {}
     for program in programs:
-        nodes = _build_dag(_virtual(puzzle), program)
+        nodes = build_dag(_virtual(puzzle), program)
         for node in nodes:
             if node.op is not None:
                 pool.setdefault(node.value, set()).add(
@@ -129,7 +129,7 @@ def merge_plan(
     """Fewest-values plan reached from `base` by swapping in pooled derivations."""
     starts = set(puzzle.starting_values)
     roots = [t for t in puzzle.targets if t not in starts]
-    nodes = _build_dag(_virtual(puzzle), base)
+    nodes = build_dag(_virtual(puzzle), base)
     chosen = {
         n.value: (n.op, nodes[n.a].value, nodes[n.b].value) for n in nodes if n.op
     }
@@ -361,6 +361,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     puzzles = load_puzzles(args.puzzles)
     files = [load_submission(p) for p in args.submissions]
     jobs = [(p, [f[p.id] for f in files if p.id in f]) for p in puzzles]
+    if uncovered := [p.id for p, candidates in jobs if not candidates]:
+        raise SystemExit(f"no candidate program in any file for {uncovered[:5]}")
     with multiprocessing.Pool(args.workers) as pool:
         results = pool.map(_cross_one, jobs, chunksize=1)
     merged = {p.id: program for p, program in zip(puzzles, results, strict=True)}

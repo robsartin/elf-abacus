@@ -1,12 +1,17 @@
+import pytest
+
+from elf_abacus import crossover as crossover_module
 from elf_abacus.crossover import (
     crossover,
     derivations,
     emit_in_priority_order,
+    main,
     merge_derivations,
     refine_by_cost,
     search_orders,
 )
-from elf_abacus.verifier import Puzzle, verify
+from elf_abacus.io import load_submission, write_submission
+from elf_abacus.verifier import InvalidProgram, Puzzle, verify
 
 # starts 1, 2; targets 6 and 7. WASTEFUL builds 7 through the long chain 4, 5; CHEAP shares 3 and 4.
 PUZZLE = Puzzle("p1", [1, 2], [6, 7], 100)
@@ -104,7 +109,78 @@ def test_shouldKeepOperandsFirstWhenPriorityPutsConsumerEarly():
     assert program[-1][:3] in (["+", 2, 3], ["+", 3, 2])
 
 
-def test_shouldNeverReturnWorseThanDefaultWhenSearchingOrders():
-    """search_orders keeps the lowest-cost program seen, including the default emission."""
-    best = search_orders(ORDER_PUZZLE, ORDER_PLAN, len, tries=5, seed=0)
+def _first_is_four(program):
+    return 0 if program[0] == ["+", 1, 1, 2] else 1
+
+
+def _first_is_three(program):
+    return 0 if program[0] == ["+", 0, 1, 2] else 1
+
+
+def test_shouldFindBetterOrderWhenAPerturbedEmissionCostsLess():
+    """The default emits 3 first; a cost preferring 4 first must be reached by a perturbed order."""
+    best = search_orders(ORDER_PUZZLE, ORDER_PLAN, _first_is_four, tries=40, seed=0)
+    assert _first_is_four(best) == 0
     assert verify(ORDER_PUZZLE, best) == 3
+
+
+def test_shouldKeepDefaultOrderWhenNoPerturbedEmissionCostsLess():
+    """search_orders never returns something costing more than the default emission."""
+    default = search_orders(ORDER_PUZZLE, ORDER_PLAN, _first_is_three, tries=0, seed=0)
+    best = search_orders(ORDER_PUZZLE, ORDER_PLAN, _first_is_three, tries=40, seed=0)
+    assert _first_is_three(default) == 0
+    assert best == default
+
+
+def test_shouldRaiseWhenNoCandidateFitsTheRegisterFile(monkeypatch):
+    """When nothing compiles to the real register file and no input fits either, it says so."""
+    monkeypatch.setattr(crossover_module, "rematerialize", lambda *args: None)
+    monkeypatch.setattr(
+        crossover_module,
+        "verify",
+        lambda puzzle, program: (
+            verify(puzzle, program) if puzzle.registers > 2 else _reject()
+        ),
+    )
+    tiny = Puzzle("p1", [1, 2], [6, 7], 100, registers=2)
+    with pytest.raises(InvalidProgram, match="fits"):
+        crossover(tiny, [CHEAP])
+
+
+def _reject():
+    raise InvalidProgram("does not fit")
+
+
+def _write_puzzles(path, rows):
+    header = "id,starting_values,targets,value_limit,registers\n"
+    path.write_text(header + "".join(f"{r}\n" for r in rows))
+
+
+P1_ROW = 'p1,"[1, 2]","[6, 7]",100,48'
+P2_ROW = 'p2,"[1, 2]","[6, 7]",100,48'
+
+
+def test_shouldWriteCrossedProgramsWhenRunFromTheCommandLine(tmp_path, capsys):
+    puzzles = tmp_path / "puzzles.csv"
+    _write_puzzles(puzzles, [P1_ROW])
+    write_submission(tmp_path / "a.csv", {"p1": WASTEFUL})
+    write_submission(tmp_path / "b.csv", {"p1": CHEAP})
+    out = tmp_path / "out.csv"
+    main(
+        ["--puzzles", str(puzzles), "--out", str(out)]
+        + [str(tmp_path / "a.csv"), str(tmp_path / "b.csv")]
+    )
+    result = load_submission(out)
+    assert verify(PUZZLE, result["p1"]) <= len(CHEAP)
+    assert str(len(result["p1"])) in capsys.readouterr().out
+
+
+def test_shouldFailBeforeSearchingWhenAPuzzleHasNoCandidate(tmp_path):
+    """A gap in the inputs is reported up front, not after hours of search."""
+    puzzles = tmp_path / "puzzles.csv"
+    _write_puzzles(puzzles, [P1_ROW, P2_ROW])
+    write_submission(tmp_path / "a.csv", {"p1": CHEAP})
+    out = tmp_path / "out.csv"
+    with pytest.raises(SystemExit, match="p2"):
+        main(["--puzzles", str(puzzles), "--out", str(out), str(tmp_path / "a.csv")])
+    assert not out.exists()

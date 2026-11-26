@@ -37,12 +37,14 @@ by compiled length, as opposed to ordering its emission, added nothing measurabl
   beats.
 - **Minimise plan size and compile once**: plan size and compiled length disagree under register
   pressure, which is exactly where the gain was.
-- **Exhaustive or ILP selection over the pool**: pools are large and the compile step is the true
-  cost, which an ILP cannot see; local search plus order tries reached the gain.
+- **Exhaustive or ILP selection over the pool**: not tried. The reasoning is that the compile step
+  is the true cost and an ILP cannot see it, and that local search plus order tries already reached
+  the gain; a later experiment could still test it.
 - **Pooling inside one candidate only**: no new information; the gain comes from candidates that
   planned differently.
 
 ## Consequences
 - More candidate files make it better, so it runs last among the whole-set steps that generate
   programs and before the window superoptimiser, which then polishes locally.
-- Candidate files must be real verified submissions; a malformed one is skipped, not trusted.
+- Candidate programs that fail verification are skipped, not trusted. A file that cannot be parsed
+  at all still stops the run, and so does a puzzle that no file covers (reported before any search).
