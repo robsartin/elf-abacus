@@ -38,8 +38,7 @@ by compiled length, as opposed to ordering its emission, added nothing measurabl
 - **Minimise plan size and compile once**: plan size and compiled length disagree under register
   pressure, which is exactly where the gain was.
 - **Exhaustive or ILP selection over the pool**: pools are large and the compile step is the true
-  cost, which an ILP cannot see; local search plus order tries reached the gain at about a
-  minute of CPU per puzzle batch.
+  cost, which an ILP cannot see; local search plus order tries reached the gain.
 - **Pooling inside one candidate only**: no new information; the gain comes from candidates that
   planned differently.
 
