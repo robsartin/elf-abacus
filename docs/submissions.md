@@ -14,10 +14,12 @@ Kaggle is the authority for the scores; the local scorer matched it exactly ever
    (add `--polish` to also re-run the slow peephole pass over every winner).
 3. Cross the files over (ADR 0020): `python -m elf_abacus.crossover --puzzles data/puzzles.csv
    --workers 24 --out submissions/cross.csv submissions/*.csv`. Give it every file, not just the best.
-4. Run the window superoptimiser last (ADRs 0018, 0019):
+4. Run the DAG rebuild pass (ADR 0021; about 58 CPU-minutes over the whole set):
+   `python -m elf_abacus.dagopt --puzzles data/puzzles.csv --workers 10 --out submissions/best-d.csv <file>`
+5. Run the window superoptimiser last (ADRs 0018, 0019):
    `python -m elf_abacus.superopt --window 6 --workers 12 --puzzles data/puzzles.csv --out submissions/best-s.csv <file>`
    (window 4 first is cheap; window 6 is about 33 CPU-minutes over the whole set).
-5. Merge the results with portfolio again, then submit only if the printed total is below the current best:
+6. Merge the results with portfolio again, then submit only if the printed total is below the current best:
    `.venv/bin/kaggle competitions submit -c santa-2026 -f submissions/best.csv -m "<message>"`.
 
 ## History (2026-11-20 onwards)
@@ -40,6 +42,8 @@ Kaggle is the authority for the scores; the local scorer matched it exactly ever
 | 2026-11-26 | 177,988 | `--seed-offset 12` run, best-of, superoptimiser |
 | 2026-11-26 | 177,975 | window 6 superoptimiser |
 | 2026-11-26 | 177,135 | crossover with emission-order search (about -825 on its own), then window 6 |
+| 2026-11-27 | 176,753 | `--seed-offset 15` run, best-of (176,864), crossover (176,761), window 6 |
+| 2026-11-27 | 176,594 | DAG rebuild pass (176,601; it saved 158 on the previous best), then window 6 |
 
 Each whole-set run alone scored 181,800 to 182,750, so the gain comes from taking the best of several
 runs per puzzle, and it shrinks with each new run (about 1,700, 800, 600, then 400 points). Later
@@ -58,3 +62,8 @@ meet-in-the-middle finishing, a "large basis, two operations per target" generat
 counting: about 5.8 target bits per instruction), peephole rebuild with both operands new (0 gain),
 pressure-aware rescheduling (at most 0.3%), a superoptimiser and peephole fixpoint (no gain), and
 virtual register files of 128 or more (64 is best).
+
+Round twelve (2026-11-27): a local search over emission orders in crossover (hill-climb, annealing,
+a Belady-style priority) matched random perturbation within seed noise on a 25-puzzle sample, so
+`search_orders` stays as it is; order search only moved that sample 8,313 to about 8,305 once crossover and
+the superoptimiser had already run.
